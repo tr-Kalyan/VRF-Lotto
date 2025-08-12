@@ -1,24 +1,22 @@
 // SPDX-License-Identifier: UNLICENSED
-pragma solidity ^0.8.13;
+pragma solidity ^0.8.20;
 
 import {Test, console} from "forge-std/Test.sol";
-import {Counter} from "../src/Counter.sol";
+import {Lottery} from "../src/Lotto.sol";
 
-contract CounterTest is Test {
-    Counter public counter;
+contract LotteryTest is Test {
+    Lottery lot;
+
+    uint256 constant minimumFee = 0.01 ether;
+    uint256 constant maxPlayers = 1000;
+    uint256 constant duration = 1 days;
+    uint64 constant SUB_ID = 1;
+
+
+    address alice = address(0xA11CE);
+    address bob   = address(0xB0B);
 
     function setUp() public {
-        counter = new Counter();
-        counter.setNumber(0);
-    }
-
-    function test_Increment() public {
-        counter.increment();
-        assertEq(counter.number(), 1);
-    }
-
-    function testFuzz_SetNumber(uint256 x) public {
-        counter.setNumber(x);
-        assertEq(counter.number(), x);
+        lot = new Lottery(minimumFee, maxPlayers, duration, SUB_ID);
     }
 }

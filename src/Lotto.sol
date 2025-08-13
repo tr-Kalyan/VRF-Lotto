@@ -110,6 +110,7 @@ contract Lottery is Ownable, VRFConsumerBaseV2, ReentrancyGuard {
         }
     }
 
+    // Close on deadline or cap and request VRF for multi-player
     function closeAndRequestWinner() external {
         require(
             s_lotteryState == LotteryState.OPEN || s_lotteryState == LotteryState.CLOSED,
@@ -148,6 +149,7 @@ contract Lottery is Ownable, VRFConsumerBaseV2, ReentrancyGuard {
         emit WinnerRequested(s_requestId);
     }
 
+    // VRF callback: finalize winner
     function fulfillRandomWords(uint256 requestId, uint256[] memory randomWords) internal override {
         require(s_lotteryState == LotteryState.CALCULATING, "BAD_STATE");
         require(requestId == s_requestId, "INVALID_REQUEST_ID");
@@ -164,6 +166,7 @@ contract Lottery is Ownable, VRFConsumerBaseV2, ReentrancyGuard {
         emit WinnerSelected(s_winner);
     }
 
+    // Timeout-ased cancel for liveness
     function cancelIfTimedOut() external {
         require(s_lotteryState == LotteryState.CALCULATING, "BAD_STATE");
         require(s_vrfRequestTimestamp != 0, "NO_VRF_REQUEST");
@@ -175,6 +178,7 @@ contract Lottery is Ownable, VRFConsumerBaseV2, ReentrancyGuard {
         emit RoundCancelled();
     }
 
+    // Winner claims prize(pull)
     function claimPrize() external nonReentrant {
         require(s_lotteryState == LotteryState.FINISHED, "Not finished");
         require(msg.sender == s_winner,"Not winner");
@@ -188,6 +192,7 @@ contract Lottery is Ownable, VRFConsumerBaseV2, ReentrancyGuard {
         emit PrizeClaimed(msg.sender, prize);
     }
 
+    // Players claims refund when cancelled (pull)
     function claimRefund() external nonReentrant {
         require(s_lotteryState == LotteryState.CANCELLED, "Lottery not cancelled");
         uint256 ticketsBought = s_ticketCount[msg.sender];
@@ -202,6 +207,7 @@ contract Lottery is Ownable, VRFConsumerBaseV2, ReentrancyGuard {
         emit RefundClaimed(msg.sender, refundAmount);
     }
 
+    // Subscription LINK heuristic check
     function _hasEnoughLink() internal view returns (bool) {
         (uint96 balance, , , ) = COORDINATOR.getSubscription(subscriptionId);
         return balance >= ESTIMATED_LINK_COST;

@@ -28,7 +28,7 @@ contract LotteryFactory {
         uint16 _requestConfirmations,
         uint32 _numWords,
         uint256 _timeout
-    ) external {
+    ) external onlyOwner{
         Lottery newLottery = new Lottery(
             _minFee,
             maxPlayers,

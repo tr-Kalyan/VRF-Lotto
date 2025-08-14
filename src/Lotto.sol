@@ -1,11 +1,11 @@
 // SPDX-License-Identifier: UNLICENSED
 pragma solidity ^0.8.20;
 
-import "@openzeppelin/contracts/access/Ownable.sol";
-import "@openzeppelin/contracts/interfaces/IERC20.sol";
-import "@openzeppelin/contracts/security/ReentrancyGuard.sol";
-import "@chainlink/contracts/src/v0.8/VRFConsumerBaseV2.sol";
-import "@chainlink/contracts/src/v0.8/interfaces/VRFCoordinatorV2Interface.sol";
+import "openzeppelin-contracts/contracts/access/Ownable.sol";
+import "openzeppelin-contracts/contracts/interfaces/IERC20.sol";
+import "openzeppelin-contracts/contracts/utils/ReentrancyGuard.sol";
+import "@chainlink/contracts/v0.8/VRFConsumerBaseV2.sol";
+import "@chainlink/contracts/v0.8/interfaces/VRFCoordinatorV2Interface.sol";
 
 contract Lottery is Ownable, VRFConsumerBaseV2, ReentrancyGuard {
     enum LotteryState { OPEN, CLOSED, CALCULATING, CANCELLED, FINISHED }
@@ -62,7 +62,7 @@ contract Lottery is Ownable, VRFConsumerBaseV2, ReentrancyGuard {
         uint16 _requestConfirmations,
         uint32 _numWords,
         uint256 _timeout
-    ) VRFConsumerBaseV2(vrfCoordinator) {
+    ) VRFConsumerBaseV2(vrfCoordinator) Ownable(msg.sender){
         require(_minFee > 0, "FREE_ENTRY_FORBIDDEN");
         require(maxPlayers > 0, "INVALID_MAX_PLAYERS");
         require(_timeout >= 60 && _timeout <= 24 hours, "TIMEOUT_RANGE");

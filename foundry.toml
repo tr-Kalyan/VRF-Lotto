@@ -4,9 +4,9 @@ out = "out"
 libs = ["lib"]
 
 
-[remappings]
+[profile.remappings]
 '@openzeppelin/contracts/' = 'lib/openzeppelin-contracts/contracts/'
-'@chainlink/contracts/' = 'lib/chainlink/contracts/src/v0.8/'
+'@chainlink/contracts/' = 'lib/foundry-chainlink-toolkit/contracts/v0.8.16/' 
 
 
 # See more config options https://github.com/foundry-rs/foundry/blob/master/crates/config/README.md#all-options

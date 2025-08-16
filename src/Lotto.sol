@@ -35,7 +35,6 @@ contract Lottery is Ownable, VRFConsumerBaseV2, ReentrancyGuard {
     VRFCoordinatorV2Interface public COORDINATOR;
     IERC20 public LINK_TOKEN;
     uint64 public subscriptionId;
-    address public vrfCoordinator = 0x8103B0A8A00be2DDC778e6e7eaa21791Cd364625; // Sepolia
     address public linkToken = 0x779877A7B0D9E8603169DdbD7836e478b4624789;   // Sepolia LINK
     bytes32 public keyHash = 0x474e34a077df58807dbe9c96d3c009b23b3c6d0cce433e59bbf5b34f823bc56c;
 
@@ -54,6 +53,7 @@ contract Lottery is Ownable, VRFConsumerBaseV2, ReentrancyGuard {
     event RoundCancelled();
 
     constructor(
+        address _vrfCoordinator,
         uint256 _minFee,
         uint256 maxPlayers,
         uint256 duration,
@@ -62,7 +62,7 @@ contract Lottery is Ownable, VRFConsumerBaseV2, ReentrancyGuard {
         uint16 _requestConfirmations,
         uint32 _numWords,
         uint256 _timeout
-    ) VRFConsumerBaseV2(vrfCoordinator) Ownable(msg.sender){
+    ) VRFConsumerBaseV2(_vrfCoordinator) Ownable(msg.sender){
         require(_minFee > 0, "FREE_ENTRY_FORBIDDEN");
         require(maxPlayers > 0, "INVALID_MAX_PLAYERS");
         require(_timeout >= 60 && _timeout <= 24 hours, "TIMEOUT_RANGE");
@@ -76,7 +76,7 @@ contract Lottery is Ownable, VRFConsumerBaseV2, ReentrancyGuard {
         s_deadline = block.timestamp + duration;
         s_lotteryState = LotteryState.OPEN;
 
-        COORDINATOR = VRFCoordinatorV2Interface(vrfCoordinator);
+        COORDINATOR = VRFCoordinatorV2Interface(_vrfCoordinator);
         LINK_TOKEN = IERC20(linkToken);
         subscriptionId = _subscriptionId;
 

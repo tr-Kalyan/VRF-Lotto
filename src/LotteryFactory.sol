@@ -7,6 +7,7 @@ contract LotteryFactory {
     address[] public allLotteries;
     uint64 public subscriptionId; // Chainlink VRF subscription ID (shared across all lotteries)
     address public owner;
+    address public vrfCoordinator;
 
     event LotteryCreated(address indexed lotteryAddress, address indexed creator, uint256 minFee);
 
@@ -15,8 +16,9 @@ contract LotteryFactory {
         _;
     }
 
-    constructor(uint64 _subscriptionId) {
+    constructor(uint64 _subscriptionId, address _vrfCoordinator) {
         subscriptionId = _subscriptionId;
+        vrfCoordinator = _vrfCoordinator;
         owner = msg.sender;
     }
 
@@ -30,6 +32,7 @@ contract LotteryFactory {
         uint256 _timeout
     ) external onlyOwner{
         Lottery newLottery = new Lottery(
+            vrfCoordinator,
             _minFee,
             maxPlayers,
             duration,

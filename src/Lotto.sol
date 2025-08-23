@@ -1,41 +1,41 @@
 // SPDX-License-Identifier: UNLICENSED
 pragma solidity ^0.8.20;
 
-import "openzeppelin-contracts/contracts/access/Ownable.sol";
-import "openzeppelin-contracts/contracts/interfaces/IERC20.sol";
-import "openzeppelin-contracts/contracts/utils/ReentrancyGuard.sol";
-import "@chainlink/contracts/v0.8/VRFConsumerBaseV2.sol";
-import "@chainlink/contracts/v0.8/interfaces/VRFCoordinatorV2Interface.sol";
+import {Ownable} from "openzeppelin-contracts/contracts/access/Ownable.sol";
+import {IERC20} from "openzeppelin-contracts/contracts/interfaces/IERC20.sol";
+import {ReentrancyGuard} from "openzeppelin-contracts/contracts/utils/ReentrancyGuard.sol";
+import {VRFConsumerBaseV2} from "@chainlink/contracts/src/v0.8/vrf/VRFConsumerBaseV2.sol";
+import {VRFCoordinatorV2Interface} from "@chainlink/contracts/src/v0.8/vrf/interfaces/VRFCoordinatorV2Interface.sol";
 
 contract Lottery is Ownable, VRFConsumerBaseV2, ReentrancyGuard {
     enum LotteryState { OPEN, CLOSED, CALCULATING, CANCELLED, FINISHED }
 
     // Core state
-    LotteryState public s_lotteryState;
-    address[] private s_players;
-    mapping(address => uint256) private s_ticketCount;
+    LotteryState public lotteryState;
+    address[] private players;
+    mapping(address => uint256) private ticketCount;
 
     // Params
-    uint256 public s_maxPlayers;
-    uint256 public s_maxTicketsPerAddress;
-    uint256 public s_deadline;
+    uint256 public maxPlayers;
+    uint256 public maxTicketsPerAddress;
+    uint256 public deadline;
     uint256 public factoryMinFee;
 
     // VRF tracking
-    uint256 public s_vrfRequestTimestamp;
-    uint256 public s_timeout;
+    uint256 public vrfRequestTimestamp;
+    uint256 public timeout;
     uint256 public constant MAX_TICKETS_PER_TX = 100;
 
     // Outcome
-    address public s_winner;
-    uint256 public s_requestId;
-    bool public s_prizeClaimed;
+    address public winner;
+    uint256 public requestId;
+    bool public prizeClaimed;
 
     // Chainlink VRF config
-    VRFCoordinatorV2Interface public COORDINATOR;
-    IERC20 public LINK_TOKEN;
+    VRFCoordinatorV2Interface public coordinator;
+    IERC20 public linkToken;
     uint64 public subscriptionId;
-    address public linkToken = 0x779877A7B0D9E8603169DdbD7836e478b4624789;   // Sepolia LINK
+    address public linkTokenAddress = 0x779877A7B0D9E8603169DdbD7836e478b4624789; // Sepolia LINK
     bytes32 public keyHash = 0x474e34a077df58807dbe9c96d3c009b23b3c6d0cce433e59bbf5b34f823bc56c;
 
     uint32 public callbackGasLimit;
@@ -55,136 +55,132 @@ contract Lottery is Ownable, VRFConsumerBaseV2, ReentrancyGuard {
     constructor(
         address _vrfCoordinator,
         uint256 _minFee,
-        uint256 maxPlayers,
-        uint256 duration,
+        uint256 _maxPlayers,
+        uint256 _duration,
         uint64 _subscriptionId,
         uint32 _callbackGasLimit,
         uint16 _requestConfirmations,
         uint32 _numWords,
         uint256 _timeout
-    ) VRFConsumerBaseV2(_vrfCoordinator) Ownable(msg.sender){
+    ) VRFConsumerBaseV2(_vrfCoordinator) Ownable(msg.sender) {
         require(_minFee > 0, "FREE_ENTRY_FORBIDDEN");
-        require(maxPlayers > 0, "INVALID_MAX_PLAYERS");
+        require(_maxPlayers > 0, "INVALID_MAX_PLAYERS");
         require(_timeout >= 60 && _timeout <= 24 hours, "TIMEOUT_RANGE");
         require(_numWords >= 1, "NUM_WORDS");
 
         factoryMinFee = _minFee;
-        s_maxPlayers = maxPlayers;
-        s_maxTicketsPerAddress = maxPlayers / 20;
-        if (s_maxTicketsPerAddress == 0) s_maxTicketsPerAddress = 1;
+        maxPlayers = _maxPlayers;
+        maxTicketsPerAddress = _maxPlayers / 20;
+        if (maxTicketsPerAddress == 0) maxTicketsPerAddress = 1;
 
-        s_deadline = block.timestamp + duration;
-        s_lotteryState = LotteryState.OPEN;
+        deadline = block.timestamp + _duration;
+        lotteryState = LotteryState.OPEN;
 
-        COORDINATOR = VRFCoordinatorV2Interface(_vrfCoordinator);
-        LINK_TOKEN = IERC20(linkToken);
+        coordinator = VRFCoordinatorV2Interface(_vrfCoordinator);
+        linkToken = IERC20(linkTokenAddress);
         subscriptionId = _subscriptionId;
 
         callbackGasLimit = _callbackGasLimit;
         requestConfirmations = _requestConfirmations;
         numWords = _numWords;
-        s_timeout = _timeout;
+        timeout = _timeout;
     }
 
     function enter(uint256 tickets) external payable {
-        require(s_lotteryState == LotteryState.OPEN, "LOTTERY_NOT_OPEN");
-        require(block.timestamp < s_deadline, "DEADLINE_PASSED");
+        require(lotteryState == LotteryState.OPEN, "LOTTERY_NOT_OPEN");
+        require(block.timestamp < deadline, "DEADLINE_PASSED");
         require(tickets > 0 && tickets <= MAX_TICKETS_PER_TX, "INVALID_TICKET_COUNT");
-        require(s_players.length + tickets <= s_maxPlayers, "MAX_TICKETS_REACHED");
+        require(players.length + tickets <= maxPlayers, "MAX_TICKETS_REACHED");
 
-        uint256 newCount = s_ticketCount[msg.sender] + tickets;
-        require(newCount <= s_maxTicketsPerAddress, "ADDRESS_CAP");
+        uint256 newCount = ticketCount[msg.sender] + tickets;
+        require(newCount <= maxTicketsPerAddress, "ADDRESS_CAP");
 
         uint256 cost = tickets * factoryMinFee;
         require(msg.value == cost, "INCORRECT_ETH");
 
-        s_ticketCount[msg.sender] = newCount;
+        ticketCount[msg.sender] = newCount;
         for (uint256 i = 0; i < tickets; i++) {
-            s_players.push(msg.sender);
+            players.push(msg.sender);
         }
 
         emit Entered(msg.sender, tickets, cost);
 
-        if (s_players.length == s_maxPlayers) {
-            s_lotteryState = LotteryState.CLOSED;
+        if (players.length == maxPlayers) {
+            lotteryState = LotteryState.CLOSED;
         }
     }
 
-    // Close on deadline or cap and request VRF for multi-player
     function closeAndRequestWinner() external {
         require(
-            s_lotteryState == LotteryState.OPEN || s_lotteryState == LotteryState.CLOSED,
+            lotteryState == LotteryState.OPEN || lotteryState == LotteryState.CLOSED,
             "INVALID_STATE"
         );
-        require(s_vrfRequestTimestamp == 0, "VRF_ALREADY_REQUESTED");
+        require(vrfRequestTimestamp == 0, "VRF_ALREADY_REQUESTED");
 
-        bool deadlineReached = block.timestamp >= s_deadline;
-        bool capFilled = s_players.length == s_maxPlayers;
+        bool deadlineReached = block.timestamp >= deadline;
+        bool capFilled = players.length == maxPlayers;
         require(deadlineReached || capFilled, "NOT_READY");
 
-        if (s_players.length == 0) {
-            s_lotteryState = LotteryState.CANCELLED;
+        if (players.length == 0) {
+            lotteryState = LotteryState.CANCELLED;
             return;
         }
 
-        if (s_players.length == 1) {
-            s_winner = s_players[0];
-            s_lotteryState = LotteryState.FINISHED;
-            emit WinnerSelected(s_winner);
+        if (players.length == 1) {
+            winner = players[0];
+            lotteryState = LotteryState.FINISHED;
+            emit WinnerSelected(winner);
             return;
         }
 
         require(_hasEnoughLink(), "VRF_FUNDS_LOW");
 
-        s_lotteryState = LotteryState.CALCULATING;
-        s_requestId = COORDINATOR.requestRandomWords(
+        lotteryState = LotteryState.CALCULATING;
+        requestId = coordinator.requestRandomWords(
             keyHash,
             subscriptionId,
             requestConfirmations,
             callbackGasLimit,
             numWords
         );
-        s_vrfRequestTimestamp = block.timestamp;
+        vrfRequestTimestamp = block.timestamp;
 
-        emit WinnerRequested(s_requestId);
+        emit WinnerRequested(requestId);
     }
 
-    // VRF callback: finalize winner
-    function fulfillRandomWords(uint256 requestId, uint256[] memory randomWords) internal override {
-        require(s_lotteryState == LotteryState.CALCULATING, "BAD_STATE");
-        require(requestId == s_requestId, "INVALID_REQUEST_ID");
+    function fulfillRandomWords(uint256 _requestId, uint256[] memory randomWords) internal override {
+        require(lotteryState == LotteryState.CALCULATING, "BAD_STATE");
+        require(_requestId == requestId, "INVALID_REQUEST_ID");
         require(randomWords.length > 0, "NO_RANDOM_WORDS");
 
-        uint256 totalTickets = s_players.length;
+        uint256 totalTickets = players.length;
         require(totalTickets > 0, "NOT_ENOUGH_PLAYERS");
 
         uint256 winnerIndex = randomWords[0] % totalTickets;
-        s_winner = s_players[winnerIndex];
-        s_lotteryState = LotteryState.FINISHED;
-        s_vrfRequestTimestamp = 0;
+        winner = players[winnerIndex];
+        lotteryState = LotteryState.FINISHED;
+        vrfRequestTimestamp = 0;
 
-        emit WinnerSelected(s_winner);
+        emit WinnerSelected(winner);
     }
 
-    // Timeout-ased cancel for liveness
     function cancelIfTimedOut() external {
-        require(s_lotteryState == LotteryState.CALCULATING, "BAD_STATE");
-        require(s_vrfRequestTimestamp != 0, "NO_VRF_REQUEST");
-        require(block.timestamp >= s_vrfRequestTimestamp + s_timeout, "NOT_TIMED_OUT");
+        require(lotteryState == LotteryState.CALCULATING, "BAD_STATE");
+        require(vrfRequestTimestamp != 0, "NO_VRF_REQUEST");
+        require(block.timestamp >= vrfRequestTimestamp + timeout, "NOT_TIMED_OUT");
 
-        s_lotteryState = LotteryState.CANCELLED;
-        s_vrfRequestTimestamp = 0;
+        lotteryState = LotteryState.CANCELLED;
+        vrfRequestTimestamp = 0;
 
         emit RoundCancelled();
     }
 
-    // Winner claims prize(pull)
     function claimPrize() external nonReentrant {
-        require(s_lotteryState == LotteryState.FINISHED, "Not finished");
-        require(msg.sender == s_winner,"Not winner");
-        require(!s_prizeClaimed, "Prize already claimed");
+        require(lotteryState == LotteryState.FINISHED, "Not finished");
+        require(msg.sender == winner, "Not winner");
+        require(!prizeClaimed, "Prize already claimed");
 
-        s_prizeClaimed = true;
+        prizeClaimed = true;
         uint256 prize = address(this).balance;
         (bool success, ) = msg.sender.call{value: prize}("");
         require(success, "Transfer failed");
@@ -192,13 +188,12 @@ contract Lottery is Ownable, VRFConsumerBaseV2, ReentrancyGuard {
         emit PrizeClaimed(msg.sender, prize);
     }
 
-    // Players claims refund when cancelled (pull)
     function claimRefund() external nonReentrant {
-        require(s_lotteryState == LotteryState.CANCELLED, "Lottery not cancelled");
-        uint256 ticketsBought = s_ticketCount[msg.sender];
+        require(lotteryState == LotteryState.CANCELLED, "Lottery not cancelled");
+        uint256 ticketsBought = ticketCount[msg.sender];
         require(ticketsBought > 0, "No refund available");
 
-        s_ticketCount[msg.sender] = 0;
+        ticketCount[msg.sender] = 0;
         uint256 refundAmount = ticketsBought * factoryMinFee;
 
         (bool success, ) = msg.sender.call{value: refundAmount}("");
@@ -207,19 +202,19 @@ contract Lottery is Ownable, VRFConsumerBaseV2, ReentrancyGuard {
         emit RefundClaimed(msg.sender, refundAmount);
     }
 
-    // Subscription LINK heuristic check
     function _hasEnoughLink() internal view returns (bool) {
-        (uint96 balance, , , ) = COORDINATOR.getSubscription(subscriptionId);
+        (uint96 balance, , , ) = coordinator.getSubscription(subscriptionId);
         return balance >= ESTIMATED_LINK_COST;
     }
 
-    // Views
     function getPlayersCount() external view returns (uint256) {
-        return s_players.length;
+        return players.length;
     }
 
+
+
     function getTicketsOf(address player) external view returns (uint256) {
-        return s_ticketCount[player];
+        return ticketCount[player];
     }
 
     function getPot() external view returns (uint256) {

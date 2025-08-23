@@ -1,10 +1,10 @@
 // SPDX-License-Identifier: UNLICENSED
 pragma solidity ^0.8.20;
 
-import {Test, console} from "forge-std/Test.sol";
+import {Test} from "forge-std/Test.sol";
 import {Lottery} from "../src/Lotto.sol";
 import {LotteryFactory} from "../src/LotteryFactory.sol";
-import {MockVRFCoordinatorV2} from "foundry-chainlink-toolkit/contracts/mocks/MockVRFCoordinatorV2.sol";
+import {VRFCoordinatorV2_5Mock} from "@chainlink/contracts/src/v0.8/vrf/mocks/VRFCoordinatorV2_5Mock.sol";
 
 contract LotteryFactoryTest is Test {
     // State variables 
@@ -13,22 +13,29 @@ contract LotteryFactoryTest is Test {
     address internal constant USER = address(0x1);
 
     // Mocks and Config
-    uint64 internal SUB_ID;
-    MockVRFCoordinatorV2 internal vrfCoordinatorMock;
+    uint64 internal subscriptionId;
+    VRFCoordinatorV2_5Mock internal vrfCoordinatorMock;
     uint256 internal constant FUNDING_AMOUNT = 100 ether; // 100 LINK
 
+    uint96 public constant MOCK_BASE_FEE = 0.25 ether;
+    uint96 public constant MOCK_GAS_PRICE = 1e9; // 1 gwei
+    int256 public constant MOCK_WEI_PER_UNIT_LINK = 4e15;
     function setUp() public {
         // Deploy the Mock Coordinator
-        vrfCoordinatorMock = new MockVRFCoordinatorV2();
+        vrfCoordinatorMock = new VRFCoordinatorV2_5Mock(
+            MOCK_BASE_FEE,
+            MOCK_GAS_PRICE,
+            MOCK_WEI_PER_UNIT_LINK
+        );
 
         // Create a subscription on the mock
-        SUB_ID = vrfCoordinatorMock.createSubscription();
+        subscriptionId = uint64(vrfCoordinatorMock.createSubscription());
 
         // Fund the subscription on the mock
-        vrfCoordinatorMock.fundSubscription(SUB_ID, FUNDING_AMOUNT);
+        vrfCoordinatorMock.fundSubscription(subscriptionId, FUNDING_AMOUNT);
 
         // Deploy our factory, giving it the MOCK coordinator's address
-        factory = new LotteryFactory(SUB_ID, address(vrfCoordinatorMock));
+        factory = new LotteryFactory(subscriptionId, address(vrfCoordinatorMock));
     }
 
     // Only owner can create new Lottery using LotteryFactory

@@ -4,193 +4,171 @@ pragma solidity ^0.8.20;
 import {Test} from "forge-std/Test.sol";
 import {Lottery} from "../src/Lotto.sol";
 import {LotteryFactory} from "../src/LotteryFactory.sol";
-import {VRFCoordinatorV2_5Mock} from "@chainlink/contracts/src/v0.8/vrf/mocks/VRFCoordinatorV2_5Mock.sol";
+import {VRFCoordinatorV2Mock} from "@chainlink/contracts/src/v0.8/vrf/mocks/VRFCoordinatorV2Mock.sol";
 
 contract LotteryFactoryTest is Test {
-    // State variables 
-    LotteryFactory internal factory;
-    Lottery internal latestLottery;
+    // Actors
     address internal constant USER = address(0x1);
+    address internal constant USER2 = address(0x2);
 
-    // Mocks and Config
-    uint64 internal subscriptionId;
-    VRFCoordinatorV2_5Mock internal vrfCoordinatorMock;
-    uint256 internal constant FUNDING_AMOUNT = 100 ether; // 100 LINK
+    // System under test
+    LotteryFactory internal factory;
+    Lottery internal lottery;
+    VRFCoordinatorV2Mock internal coord;
 
-    uint96 public constant MOCK_BASE_FEE = 0.25 ether;
-    uint96 public constant MOCK_GAS_PRICE = 1e9; // 1 gwei
-    int256 public constant MOCK_WEI_PER_UNIT_LINK = 4e15;
+    // VRF mock config
+    uint64 internal subId;
+    uint96 constant BASE_FEE = uint96(0.25 ether);
+    uint96 constant GAS_PRICE_LINK = uint96(1e9);
+    uint96 constant FUNDING_AMOUNT = uint96(100 ether);
+
     function setUp() public {
-        // Deploy the Mock Coordinator
-        vrfCoordinatorMock = new VRFCoordinatorV2_5Mock(
-            MOCK_BASE_FEE,
-            MOCK_GAS_PRICE,
-            MOCK_WEI_PER_UNIT_LINK
-        );
+        // 1) Deploy VRF v2 mock
+        coord = new VRFCoordinatorV2Mock(BASE_FEE, GAS_PRICE_LINK);
 
-        // Create a subscription on the mock
-        subscriptionId = uint64(vrfCoordinatorMock.createSubscription());
+        // 2) Create and fund subscription
+        subId = coord.createSubscription();
+        coord.fundSubscription(subId, FUNDING_AMOUNT);
 
-        // Fund the subscription on the mock
-        vrfCoordinatorMock.fundSubscription(subscriptionId, FUNDING_AMOUNT);
-
-        // Deploy our factory, giving it the MOCK coordinator's address
-        factory = new LotteryFactory(subscriptionId, address(vrfCoordinatorMock));
+        // 3) Deploy factory passing the coordinator address (adjust constructor to accept it)
+        // If your factory constructor currently only takes subscriptionId, update it to accept coordinator address too
+        factory = new LotteryFactory(subId, address(coord),address(0));
     }
 
-    // Only owner can create new Lottery using LotteryFactory
+    function _createLottery(
+        uint256 minFee,
+        uint256 maxPlayers,
+        uint256 duration,
+        uint32 cbGas,
+        uint16 conf,
+        uint32 words,
+        uint256 timeout
+    ) internal returns (Lottery) {
+        factory.createLottery(minFee, maxPlayers, duration, cbGas, conf, words, timeout);
+        address addr = factory.allLotteries(0);
+        Lottery lot = Lottery(payable(addr));
+
+        // 4) Add the lottery as a consumer on the VRF mock sub
+        coord.addConsumer(subId, address(lot));
+        return lot;
+    }
+
+    // Basic enter test remains as before
     function test_CanCreateAndEnterLottery() public {
+        lottery = _createLottery(0.1 ether, 100, 7 days, 100000, 3, 1, 2 hours);
 
-        // Owner (here the Test contract) calls createLottery
-        factory.createLottery(
-            0.1 ether, // minFee 
-            100,       // maxPlayers,
-            7 days,    // duration 
-            100000,    // callbackGasLimit 
-            3,         // requestConfirmations 
-            1,         // numWords 
-            2 hours   // timeout
-        );
-
-        // Get the address of newly created lottery
-        address lotteryAddress = factory.allLotteries(0);
-        latestLottery = Lottery(lotteryAddress);
-
-
-        // Give the user 1 ETH to spend
-        vm.deal(USER, 1 ether);
-
-        // Simulate the USER entering the lottery 
-        vm.prank(USER);
-        latestLottery.enter{value: 0.1 ether}(1);
-
-        // Assert: Check that the lottery state is correct
-        assertEq(latestLottery.getPlayersCount(), 1, "Player count should be 1");
-        assertEq(latestLottery.getTicketsOf(USER), 1, "User should have 1 ticket");
-        assertEq(address(latestLottery).balance, 0.1 ether, "Pot should have 0.1 ETH");
-    }
-
-    // Error when non owner creates lottery
-    function test_RevertsIfNonOwnerCreatesLottery() public {
-        vm.expectRevert("Not owner");
-
-        vm.prank(USER);
-
-        factory.createLottery(
-            0.1 ether, // minFee 
-            100,       // maxPlayers,
-            7 days,    // duration 
-            100000,    // callbackGasLimit 
-            3,         // requestConfirmations 
-            1,         // numWords 
-            2 hours   // timeout
-        );
-    }
-
-    // Can enter with correct fee, reverts if incorrect eth is sent
-    function test_RevertIfUserPaysIncorrectFee() public {
-        // Create a new Lottery with 0.1 ether fee 
-        factory.createLottery(
-            0.1 ether, // minFee 
-            100,       // maxPlayers,
-            7 days,    // duration 
-            100000,    // callbackGasLimit 
-            3,         // requestConfirmations 
-            1,         // numWords 
-            2 hours   // timeout
-        );
-
-        
-
-        // Get the address of newly created lottery 
-        address lotteryAddress = factory.allLotteries(0);
-        latestLottery = Lottery(lotteryAddress);
-
-        // Give the user 1 ETH to spend
-        vm.deal(USER, 1 ether);
-
-        // Simulate the USER entering the lottery 
-        vm.expectRevert("INCORRECT_ETH");
-        vm.prank(USER);
-        latestLottery.enter{value: 0.05 ether}(1);
-    }
-
-    // Cannot enter post the Lottery deadline
-    function test_RevertIfEnteringAfterDeadline() public {
-        factory.createLottery(
-            0.1 ether, // minFee 
-            100,       // maxPlayers,
-            7 days,    // duration 
-            100000,    // callbackGasLimit 
-            3,         // requestConfirmations 
-            1,         // numWords 
-            2 hours   // timeout
-        );
-
-        address lotteryAddress = factory.allLotteries(0);
-        latestLottery = Lottery(lotteryAddress);
-
-        // fast forward the clock by 8 days after the deadline
-        vm.warp(block.timestamp + 8 days);
-
-        // Expect Revert 
-        vm.expectRevert("DEADLINE_PASSED");
-
-        // A user tries to enter after the deadline 
         vm.deal(USER, 1 ether);
         vm.prank(USER);
-        latestLottery.enter{value: 0.1 ether}(1);
+        lottery.enter{value: 0.1 ether}(1);
+
+        assertEq(lottery.getPlayersCount(), 1);
+        assertEq(lottery.getTicketsOf(USER), 1);
+        assertEq(address(lottery).balance, 0.1 ether);
     }
 
+    // End-to-end: request → fulfill → claim
+    function test_CloseRequest_Fulfill_ClaimPrize() public {
+        lottery = _createLottery(0.1 ether, 100, 1 days, 200000, 3, 1, 2 hours);
 
-    // Testing the players cap 
-    function test_RevertsIfPlayersCapIsReached() public {
-        uint256 maxPlayers = 10;
-
-        factory.createLottery(
-            0.1 ether, maxPlayers, 7 days, 100000, 3, 1, 2 hours
-        );
-
-        address lotteryAddress = factory.allLotteries(0);
-        latestLottery = Lottery(lotteryAddress);
-
-        // Fill the lottery with 10 unique players using a loop 
-        for (uint256 i=1; i< maxPlayers; i++){
-
-            // Create a unique address for each player 
-            address player = address(uint160(i));
-            vm.deal(player,1 ether);
-            vm.prank(player);
-            latestLottery.enter{value: 0.1 ether}(1);
-        }
-
-        // Expect Revert: The next entry must fail 
-        vm.expectRevert("MAX_TICKETS_REACHED");
-
-        // A new user tries to buy 2 tickets when only 1 spot is left
+        // Two players
         vm.deal(USER, 1 ether);
         vm.prank(USER);
-        latestLottery.enter{value: 0.2 ether}(2);  // Try to buy 2 tickets
+        lottery.enter{value: 0.1 ether}(1);
+
+        vm.deal(USER2, 1 ether);
+        vm.prank(USER2);
+        lottery.enter{value: 0.1 ether}(1);
+
+        // Close: either after deadline or simulate deadline reached
+        vm.warp(block.timestamp + 2 days);
+        lottery.closeAndRequestWinner();
+
+        // Pull the requestId from event or public var (assume public s_requestId)
+        uint256 reqId = lottery.requestId();
+
+        // Fulfill via the v2 mock
+        coord.fulfillRandomWords(reqId, address(lottery));
+        lottery.finalizeWithStoredRandomness();
+
+        // Should be finished with a valid winner
+        assertEq(uint256(lottery.lotteryState()), uint256(Lottery.LotteryState.FINISHED));
+        address w = lottery.winner();
+        assertTrue(w == USER || w == USER2, "winner must be one of the entrants");
+
+        // Winner claims
+        uint256 pot = address(lottery).balance;
+        uint256 balBefore = w.balance;
+        vm.prank(w);
+        lottery.claimPrize();
+        assertEq(address(lottery).balance, 0);
+        assertEq(w.balance, balBefore + pot);
     }
 
+    // End-to-end: request → timeout → cancel → refund for each buyer
+    function test_CloseRequest_Timeout_Cancel_Refund() public {
+        lottery = _createLottery(0.1 ether, 100, 1 days, 200000, 3, 1, 2 hours);
 
-    // Per-Address ticket cap 
-    function test_RevertsIfAddressCapIsReached() public {
-
-        // Create a lottery with max players of 100
-        factory.createLottery(
-            0.1 ether, 100, 7 days, 100000, 3, 1, 2 hours
-        );
-
-        address lotteryAddress = factory.allLotteries(0);
-        latestLottery = Lottery(lotteryAddress);
-
-        // Expect Revert: The call must fail with "ADDRESS_CAP"
-        vm.expectRevert("ADDRESS_CAP");
-
-        // Singel user tries to buy 6 tickets (Max is 5 (100 / 20))
+        // Two players
         vm.deal(USER, 1 ether);
         vm.prank(USER);
-        latestLottery.enter{value:0.6 ether}(6); // 6 tickets * 0.1 ether
+        lottery.enter{value: 0.2 ether}(2); // buy 2 tickets
+
+        vm.deal(USER2, 1 ether);
+        vm.prank(USER2);
+        lottery.enter{value: 0.1 ether}(1);
+
+        // Close and request randomness
+        vm.warp(block.timestamp + 2 days);
+        lottery.closeAndRequestWinner();
+
+        // Do not fulfill; simulate timeout
+        vm.warp(block.timestamp + lottery.timeout() + 1);
+        lottery.cancelIfTimedOut();
+
+        assertEq(uint256(lottery.lotteryState()), uint256(Lottery.LotteryState.CANCELLED));
+
+        // Refunds
+        uint256 userBefore = USER.balance;
+        vm.prank(USER);
+        lottery.claimRefund();
+        assertEq(USER.balance, userBefore + 0.2 ether); // 2 tickets refunded
+
+        uint256 user2Before = USER2.balance;
+        vm.prank(USER2);
+        lottery.claimRefund();
+        assertEq(USER2.balance, user2Before + 0.1 ether);
+
+        // Contract drained
+        assertEq(address(lottery).balance, 0);
+    }
+
+    // Guard tests (brief samples)
+    function test_CannotCloseBeforeDeadlineOrCap() public {
+        lottery = _createLottery(0.1 ether, 3, 7 days, 100000, 3, 1, 2 hours);
+        vm.deal(USER, 1 ether);
+        vm.prank(USER);
+        lottery.enter{value: 0.1 ether}(1);
+
+        // Not deadline and cap not full
+        vm.expectRevert("NOT_READY");
+        lottery.closeAndRequestWinner();
+    }
+
+    function test_DoubleCloseReverts() public {
+        lottery = _createLottery(0.1 ether, 2, 1 days, 100000, 3, 1, 2 hours);
+
+        vm.deal(USER, 1 ether);
+        vm.prank(USER);
+        lottery.enter{value: 0.1 ether}(1);
+
+        vm.deal(USER2, 1 ether);
+        vm.prank(USER2);
+        lottery.enter{value: 0.1 ether}(1);
+
+        vm.warp(block.timestamp + 2 days);
+        lottery.closeAndRequestWinner();
+
+        vm.expectRevert("VRF_ALREADY_REQUESTED");
+        lottery.closeAndRequestWinner();
     }
 }

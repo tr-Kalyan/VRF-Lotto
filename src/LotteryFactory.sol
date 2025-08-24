@@ -2,12 +2,15 @@
 pragma solidity ^0.8.20;
 
 import {Lottery} from "./Lotto.sol";
+import {IERC20} from "openzeppelin-contracts/contracts/interfaces/IERC20.sol";
+import {VRFCoordinatorV2Interface} from "@chainlink/contracts/src/v0.8/vrf/interfaces/VRFCoordinatorV2Interface.sol";
 
 contract LotteryFactory {
     address[] public allLotteries;
     uint64 public subscriptionId; // Chainlink VRF subscription ID (shared across all lotteries)
     address public owner;
-    address public vrfCoordinator;
+    address public linkToken;
+    VRFCoordinatorV2Interface public vrfCoordinator;
 
     event LotteryCreated(address indexed lotteryAddress, address indexed creator, uint256 minFee);
 
@@ -16,9 +19,12 @@ contract LotteryFactory {
         _;
     }
 
-    constructor(uint64 _subscriptionId, address _vrfCoordinator) {
+    
+
+    constructor(uint64 _subscriptionId, address _vrfCoordinator, address _linkToken) {
         subscriptionId = _subscriptionId;
-        vrfCoordinator = _vrfCoordinator;
+        vrfCoordinator = VRFCoordinatorV2Interface(_vrfCoordinator);
+        linkToken = _linkToken;
         owner = msg.sender;
     }
 
@@ -32,7 +38,7 @@ contract LotteryFactory {
         uint256 _timeout
     ) external onlyOwner{
         Lottery newLottery = new Lottery(
-            vrfCoordinator,
+            address(vrfCoordinator),
             _minFee,
             maxPlayers,
             duration,
@@ -49,5 +55,13 @@ contract LotteryFactory {
 
     function getAllLotteries() external view returns (address[] memory) {
         return allLotteries;
+    }
+
+    function getLinkBalance(address account) external view returns (uint256) {
+        return IERC20(linkToken).balanceOf(account);
+    }
+
+    function getSubscriptionBalance(uint64 subId) external view returns (uint96 balance) {
+        (balance, , , ) = vrfCoordinator.getSubscription(subId);
     }
 }

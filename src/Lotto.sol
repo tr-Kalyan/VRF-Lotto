@@ -44,6 +44,9 @@ contract Lottery is Ownable, VRFConsumerBaseV2, ReentrancyGuard {
 
     uint256 public constant ESTIMATED_LINK_COST = 2 * 10**18; // 2 LINK
 
+    uint256 private _storedRandomWord;
+    bool public randomReady;
+
     // Events
     event Entered(address indexed player, uint256 tickets, uint256 amount);
     event RefundClaimed(address indexed player, uint256 amount);
@@ -51,6 +54,8 @@ contract Lottery is Ownable, VRFConsumerBaseV2, ReentrancyGuard {
     event WinnerSelected(address indexed winner);
     event PrizeClaimed(address indexed winner, uint256 amount);
     event RoundCancelled();
+    event RandomnessStored(uint256 indexed requestId, uint256 randomWord);
+    event FulfillmentIgnored(uint256 indexed requestId, string reason);
 
     constructor(
         address _vrfCoordinator,
@@ -111,11 +116,12 @@ contract Lottery is Ownable, VRFConsumerBaseV2, ReentrancyGuard {
     }
 
     function closeAndRequestWinner() external {
+        require(vrfRequestTimestamp == 0, "VRF_ALREADY_REQUESTED");
         require(
             lotteryState == LotteryState.OPEN || lotteryState == LotteryState.CLOSED,
             "INVALID_STATE"
         );
-        require(vrfRequestTimestamp == 0, "VRF_ALREADY_REQUESTED");
+        
 
         bool deadlineReached = block.timestamp >= deadline;
         bool capFilled = players.length == maxPlayers;
@@ -136,6 +142,12 @@ contract Lottery is Ownable, VRFConsumerBaseV2, ReentrancyGuard {
         require(_hasEnoughLink(), "VRF_FUNDS_LOW");
 
         lotteryState = LotteryState.CALCULATING;
+
+        // Clear previous randomness snapshot
+        randomReady = false;
+        _storedRandomWord = 0;
+
+
         requestId = coordinator.requestRandomWords(
             keyHash,
             subscriptionId,
@@ -149,18 +161,50 @@ contract Lottery is Ownable, VRFConsumerBaseV2, ReentrancyGuard {
     }
 
     function fulfillRandomWords(uint256 _requestId, uint256[] memory randomWords) internal override {
+    // Never revert here. Just ignore unexpected fulfillments.
+        if (lotteryState != LotteryState.CALCULATING) {
+            emit FulfillmentIgnored(_requestId, "BAD_STATE");
+            return;
+        }
+        if (_requestId != requestId) {
+            emit FulfillmentIgnored(_requestId, "STALE_OR_UNKNOWN_REQUEST");
+            return;
+        }
+        if (randomWords.length == 0) {
+            emit FulfillmentIgnored(_requestId, "NO_RANDOM_WORDS");
+            return;
+        }
+        if (players.length == 0) {
+            // No players — mark round cancelled and move on.
+            lotteryState = LotteryState.CANCELLED;
+            vrfRequestTimestamp = 0;
+            emit RoundCancelled();
+            return;
+        }
+
+        // Store randomness for later, safe processing
+        _storedRandomWord = randomWords[0];
+        randomReady = true;
+        vrfRequestTimestamp = 0;
+
+        emit RandomnessStored(_requestId, _storedRandomWord);
+    }
+
+    function finalizeWithStoredRandomness() external nonReentrant {
+        require(randomReady, "RANDOM_NOT_READY");
         require(lotteryState == LotteryState.CALCULATING, "BAD_STATE");
-        require(_requestId == requestId, "INVALID_REQUEST_ID");
-        require(randomWords.length > 0, "NO_RANDOM_WORDS");
 
         uint256 totalTickets = players.length;
         require(totalTickets > 0, "NOT_ENOUGH_PLAYERS");
 
-        uint256 winnerIndex = randomWords[0] % totalTickets;
+        uint256 winnerIndex = _storedRandomWord % totalTickets;
         winner = players[winnerIndex];
-        lotteryState = LotteryState.FINISHED;
-        vrfRequestTimestamp = 0;
 
+        // Consume the randomness
+        randomReady = false;
+        _storedRandomWord = 0;
+
+        lotteryState = LotteryState.FINISHED;
         emit WinnerSelected(winner);
     }
 

@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: UNLICENSED
+// SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;
 
 import {Ownable} from "openzeppelin-contracts/contracts/access/Ownable.sol";
@@ -8,7 +8,13 @@ import {VRFConsumerBaseV2} from "@chainlink/contracts/src/v0.8/vrf/VRFConsumerBa
 import {VRFCoordinatorV2Interface} from "@chainlink/contracts/src/v0.8/vrf/interfaces/VRFCoordinatorV2Interface.sol";
 
 contract Lottery is Ownable, VRFConsumerBaseV2, ReentrancyGuard {
-    enum LotteryState { OPEN, CLOSED, CALCULATING, CANCELLED, FINISHED }
+    enum LotteryState { 
+        OPEN, 
+        CLOSED, 
+        CALCULATING, 
+        CANCELLED, 
+        FINISHED 
+    }
 
     // Core state
     LotteryState public lotteryState;
@@ -21,9 +27,10 @@ contract Lottery is Ownable, VRFConsumerBaseV2, ReentrancyGuard {
     uint256 public deadline;
     uint256 public factoryMinFee;
 
+
     // VRF tracking
-    uint256 public vrfRequestTimestamp;
-    uint256 public timeout;
+    uint256 private vrfRequestTimestamp;
+    uint256 public immutable timeout;
     uint256 public constant MAX_TICKETS_PER_TX = 100;
 
     // Outcome
@@ -32,15 +39,14 @@ contract Lottery is Ownable, VRFConsumerBaseV2, ReentrancyGuard {
     bool public prizeClaimed;
 
     // Chainlink VRF config
-    VRFCoordinatorV2Interface public coordinator;
-    IERC20 public linkToken;
-    uint64 public subscriptionId;
-    address public linkTokenAddress = 0x779877A7B0D9E8603169DdbD7836e478b4624789; // Sepolia LINK
-    bytes32 public keyHash = 0x474e34a077df58807dbe9c96d3c009b23b3c6d0cce433e59bbf5b34f823bc56c;
+    VRFCoordinatorV2Interface public immutable coordinator;
+    uint64 private immutable subscriptionId;
+    address private immutable linkTokenAddress; // Sepolia LINK
+    bytes32 private immutable keyHash;
 
-    uint32 public callbackGasLimit;
-    uint16 public requestConfirmations;
-    uint32 public numWords;
+    uint32 public immutable callbackGasLimit;
+    uint16 public immutable requestConfirmations;
+    uint32 public immutable numWords;
 
     uint256 public constant ESTIMATED_LINK_COST = 2 * 10**18; // 2 LINK
 
@@ -66,7 +72,9 @@ contract Lottery is Ownable, VRFConsumerBaseV2, ReentrancyGuard {
         uint32 _callbackGasLimit,
         uint16 _requestConfirmations,
         uint32 _numWords,
-        uint256 _timeout
+        uint256 _timeout,
+        address _linkTokenAddress,
+        bytes32 _keyHash 
     ) VRFConsumerBaseV2(_vrfCoordinator) Ownable(msg.sender) {
         require(_minFee > 0, "FREE_ENTRY_FORBIDDEN");
         require(_maxPlayers > 0, "INVALID_MAX_PLAYERS");
@@ -82,8 +90,9 @@ contract Lottery is Ownable, VRFConsumerBaseV2, ReentrancyGuard {
         lotteryState = LotteryState.OPEN;
 
         coordinator = VRFCoordinatorV2Interface(_vrfCoordinator);
-        linkToken = IERC20(linkTokenAddress);
         subscriptionId = _subscriptionId;
+        linkTokenAddress = _linkTokenAddress;
+        keyHash = _keyHash;
 
         callbackGasLimit = _callbackGasLimit;
         requestConfirmations = _requestConfirmations;

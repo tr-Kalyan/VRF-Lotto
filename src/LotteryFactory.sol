@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: UNLICENSED
+// SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;
 
 import {Lottery} from "./Lotto.sol";
@@ -9,7 +9,8 @@ contract LotteryFactory {
     address[] public allLotteries;
     uint64 public subscriptionId; // Chainlink VRF subscription ID (shared across all lotteries)
     address public owner;
-    address public linkToken;
+    address private linkToken;
+    bytes32 private keyHash;
     VRFCoordinatorV2Interface public vrfCoordinator;
 
     event LotteryCreated(address indexed lotteryAddress, address indexed creator, uint256 minFee);
@@ -21,10 +22,11 @@ contract LotteryFactory {
 
     
 
-    constructor(uint64 _subscriptionId, address _vrfCoordinator, address _linkToken) {
+    constructor(uint64 _subscriptionId, address _vrfCoordinator, address _linkToken, bytes32 _keyHash) {
         subscriptionId = _subscriptionId;
         vrfCoordinator = VRFCoordinatorV2Interface(_vrfCoordinator);
         linkToken = _linkToken;
+        keyHash = _keyHash;
         owner = msg.sender;
     }
 
@@ -46,7 +48,9 @@ contract LotteryFactory {
             _callbackGasLimit,
             _requestConfirmations,
             _numWords,
-            _timeout
+            _timeout,
+            linkToken,
+            keyHash
         );
 
         allLotteries.push(address(newLottery));

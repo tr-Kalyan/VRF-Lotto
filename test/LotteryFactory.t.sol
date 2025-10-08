@@ -4,7 +4,7 @@ pragma solidity ^0.8.20;
 import {Test} from "forge-std/Test.sol";
 import {Lottery} from "../src/Lotto.sol";
 import {LotteryFactory} from "../src/LotteryFactory.sol";
-import {VRFCoordinatorV2Mock} from "@chainlink/contracts/src/v0.8/vrf/mocks/VRFCoordinatorV2Mock.sol";
+import {VRFCoordinatorV2_5Mock} from "@chainlink/contracts/src/v0.8/vrf/mocks/VRFCoordinatorV2_5Mock.sol";
 
 contract LotteryFactoryTest is Test {
     // Actors
@@ -14,18 +14,18 @@ contract LotteryFactoryTest is Test {
     // System under test
     LotteryFactory internal factory;
     Lottery internal lottery;
-    VRFCoordinatorV2Mock internal coord;
+    VRFCoordinatorV2_5Mock internal coord;
 
     // VRF mock config
-    uint64 internal subId;
+    uint256 internal subId;
     uint96 constant BASE_FEE = uint96(0.25 ether);
     uint96 constant GAS_PRICE_LINK = uint96(1e9);
     uint96 constant FUNDING_AMOUNT = uint96(100 ether);
-    bytes32 constant KEYHASH = 0x787d74caea10b2b357790d5b5247c2f63d1d91572a9846f780606e4d953677ae; 
+    bytes32 constant KEYHASH = 0x787d74caea10b2b357790d5b5247c2f63d1d91572a9846f780606e4d953677ae;
 
     function setUp() public {
         // 1) Deploy VRF v2 mock
-        coord = new VRFCoordinatorV2Mock(BASE_FEE, GAS_PRICE_LINK);
+        coord = new VRFCoordinatorV2_5Mock(BASE_FEE, GAS_PRICE_LINK, 0);
 
         // 2) Create and fund subscription
         subId = coord.createSubscription();
@@ -33,7 +33,7 @@ contract LotteryFactoryTest is Test {
 
         // 3) Deploy factory passing the coordinator address (adjust constructor to accept it)
         // If your factory constructor currently only takes subscriptionId, update it to accept coordinator address too
-        factory = new LotteryFactory(subId, address(coord),address(0),KEYHASH);
+        factory = new LotteryFactory(subId, address(coord), address(0), KEYHASH);
     }
 
     function _createLottery(
@@ -84,17 +84,15 @@ contract LotteryFactoryTest is Test {
         vm.warp(block.timestamp + 2 days);
         lottery.closeAndRequestWinner();
 
-
         // Attempts to enter after randomness is requested must revert
-        address LATE = address(0xBEEF);
-        vm.deal(LATE, 1 ether);
-        vm.prank(LATE);
+        address late = address(0xBEEF);
+        vm.deal(late, 1 ether);
+        vm.prank(late);
         vm.expectRevert("LOTTERY_NOT_OPEN");
         lottery.enter{value: 0.1 ether}(1);
 
-
         // Pull the requestId from event or public var (assume public s_requestId)
-        uint256 reqId = lottery.requestId();
+        uint256 reqId = lottery.s_requestId();
 
         // Fulfill via the v2 mock
         coord.fulfillRandomWords(reqId, address(lottery));
@@ -114,7 +112,6 @@ contract LotteryFactoryTest is Test {
         assertEq(w.balance, balBefore + pot);
     }
 
-
     // End-to-end: request → timeout → cancel → refund for each buyer
     function test_CloseRequest_Timeout_Cancel_Refund() public {
         lottery = _createLottery(0.1 ether, 100, 1 days, 200000, 3, 1, 2 hours);
@@ -133,7 +130,7 @@ contract LotteryFactoryTest is Test {
         lottery.closeAndRequestWinner();
 
         // Do not fulfill; simulate timeout
-        vm.warp(block.timestamp + lottery.timeout() + 1);
+        vm.warp(block.timestamp + lottery._TIMEOUT() + 1);
         lottery.cancelIfTimedOut();
 
         assertEq(uint256(lottery.lotteryState()), uint256(Lottery.LotteryState.CANCELLED));
@@ -153,7 +150,6 @@ contract LotteryFactoryTest is Test {
         assertEq(address(lottery).balance, 0);
     }
 
-
     // Wrong requestId is ignored
     function test_FulfillWithWrongRequestId() public {
         lottery = _createLottery(0.1 ether, 100, 1 days, 200000, 3, 1, 2 hours);
@@ -167,34 +163,39 @@ contract LotteryFactoryTest is Test {
         vm.prank(USER2);
         lottery.enter{value: 0.1 ether}(1);
 
-        // Request randomness 
+        // Request randomness
         vm.warp(block.timestamp + 2 days);
         lottery.closeAndRequestWinner();
-        uint256 correctReq = lottery.requestId();
+        uint256 correctReq = lottery.s_requestId();
 
         // Act: fulfill with wrong id (ignored)
         vm.expectRevert(); // mock reverts on nonexistent request
         coord.fulfillRandomWords(correctReq + 1, address(lottery));
 
         // Assert: still not finished; finalize cannot run yet
-        require(uint256(lottery.lotteryState()) != uint256(Lottery.LotteryState.FINISHED), "should not finish on wrong reqId");
+        require(
+            uint256(lottery.lotteryState()) != uint256(Lottery.LotteryState.FINISHED),
+            "should not finish on wrong reqId"
+        );
 
         // Act: fulfill with correct id, then finalize
         coord.fulfillRandomWords(correctReq, address(lottery));
         lottery.finalizeWithStoredRandomness();
 
         // Assert: finished now
-        require(uint256(lottery.lotteryState()) == uint256(Lottery.LotteryState.FINISHED), "must finish after correct fulfill");
+        require(
+            uint256(lottery.lotteryState()) == uint256(Lottery.LotteryState.FINISHED),
+            "must finish after correct fulfill"
+        );
     }
-
 
     // Single-player shortcut (no VRF)
     function test_SinglePlayerNoVRFShortcut_step4() public {
         // Arrange: one player
         lottery = _createLottery(0.1 ether, 10, 1 days, 200000, 3, 1, 2 hours);
 
-        vm.deal(USER, 1 ether); 
-        vm.prank(USER); 
+        vm.deal(USER, 1 ether);
+        vm.prank(USER);
         lottery.enter{value: 0.1 ether}(1);
 
         // Act: deadline reached and close
@@ -204,9 +205,8 @@ contract LotteryFactoryTest is Test {
         // Assert: finished, winner is the only player, no VRF request
         require(uint256(lottery.lotteryState()) == uint256(Lottery.LotteryState.FINISHED), "should finish immediately");
         require(lottery.winner() == USER, "single player should be winner");
-        require(lottery.requestId() == 0, "no VRF request expected");
+        require(lottery.s_requestId() == 0, "no VRF request expected");
     }
-
 
     // Guard tests (brief samples)
     function test_CannotCloseBeforeDeadlineOrCap() public {
@@ -219,7 +219,6 @@ contract LotteryFactoryTest is Test {
         vm.expectRevert("NOT_READY");
         lottery.closeAndRequestWinner();
     }
-
 
     // Prevent multiple VRF requests
     function test_DoubleCloseReverts() public {
@@ -241,42 +240,41 @@ contract LotteryFactoryTest is Test {
         lottery.closeAndRequestWinner();
     }
 
-
     // LINK Token balance access
     function test_SubscriptionBalance_ReadsAndDecreasesAfterFulfill() public {
         lottery = _createLottery(0.1 ether, 100, 1 days, 200000, 3, 1, 2 hours);
-        
+
         // Two players
-        vm.deal(USER, 1 ether); 
-        vm.prank(USER); 
+        vm.deal(USER, 1 ether);
+        vm.prank(USER);
         lottery.enter{value: 0.1 ether}(1);
 
         vm.deal(USER2, 1 ether);
         vm.prank(USER2);
         lottery.enter{value: 0.1 ether}(1);
 
-        uint96 balBefore = factory.getSubscriptionBalance(subId);
+        uint96 balBefore = factory.getSubscriptionBalance();
 
         assertGt(balBefore, 0, "expected funded sub");
 
         // Act: request and fulfill
         vm.warp(block.timestamp + 2 days);
         lottery.closeAndRequestWinner();
-        uint256 reqId = lottery.requestId();
+        uint256 reqId = lottery.s_requestId();
         coord.fulfillRandomWords(reqId, address(lottery));
         lottery.finalizeWithStoredRandomness();
 
         // Assert: balance decreased
-        uint96 balAfter = factory.getSubscriptionBalance(subId);
+        uint96 balAfter = factory.getSubscriptionBalance();
         assertLt(balAfter, balBefore, "balance should decrease after fulfill");
     }
 
     // Guard: Revert VRF reuest with low fund balance
     function test_RevertIfVRFFundsLow() public {
-        uint64 emptySub = coord.createSubscription();
+        uint256 emptySub = coord.createSubscription();
 
         // New factory wired to the empty sub
-        LotteryFactory emptyFactory = new LotteryFactory(emptySub, address(coord), address(0),KEYHASH);
+        LotteryFactory emptyFactory = new LotteryFactory(emptySub, address(coord), address(0), KEYHASH);
         emptyFactory.createLottery(0.1 ether, 100, 1 days, 200000, 3, 1, 2 hours);
         address addr = emptyFactory.allLotteries(0);
         Lottery lot = Lottery(payable(addr));
@@ -285,8 +283,12 @@ contract LotteryFactoryTest is Test {
         coord.addConsumer(emptySub, address(lot));
 
         // Two players to trigger VRF
-        vm.deal(USER, 1 ether); vm.prank(USER); lot.enter{value: 0.1 ether}(1);
-        vm.deal(USER2, 1 ether); vm.prank(USER2); lot.enter{value: 0.1 ether}(1);
+        vm.deal(USER, 1 ether);
+        vm.prank(USER);
+        lot.enter{value: 0.1 ether}(1);
+        vm.deal(USER2, 1 ether);
+        vm.prank(USER2);
+        lot.enter{value: 0.1 ether}(1);
 
         // Deadline reached
         vm.warp(block.timestamp + 2 days);

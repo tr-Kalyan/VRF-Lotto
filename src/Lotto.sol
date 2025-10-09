@@ -141,10 +141,12 @@ contract Lottery is  VRFConsumerBaseV2Plus, ReentrancyGuard {
         }
     }
 
+    
     // Closes the lottery and request randomness from Chainlink
-    // Caller who triggers randomness gets a reward
+    // Anyone can close the lottery. The function is open for any caller
+    // Caller who triggers randomness receives a reward of 1% of pot value
     function closeAndRequestWinner() external nonReentrant {
-        require(ticketCount[msg.sender] > 0, "MUST_BE_PLAYER");
+        
         require(vrfRequestTimestamp == 0, "VRF_ALREADY_REQUESTED");
         require(lotteryState == LotteryState.OPEN || lotteryState == LotteryState.CLOSED, "INVALID_STATE");
 

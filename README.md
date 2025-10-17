@@ -1,66 +1,181 @@
-## Foundry
+---
 
-**Foundry is a blazing fast, portable and modular toolkit for Ethereum application development written in Rust.**
+# 🏆 Decentralized Weighted Lottery (VRF v2.5)
 
-Foundry consists of:
+![Solidity](https://img.shields.io/badge/Solidity-0.8.x-2c2c2c?style=for-the-badge\&logo=solidity)
+![Foundry](https://img.shields.io/badge/Built%20With-Foundry-ff69b4?style=for-the-badge\&logo=ethereum)
+![Chainlink VRF](https://img.shields.io/badge/Chainlink-VRF%20v2.5-blue?style=for-the-badge\&logo=chainlink)
+![Audit Ready](https://img.shields.io/badge/Audit-Ready-green?style=for-the-badge)
+![License](https://img.shields.io/badge/License-MIT-yellow?style=for-the-badge)
 
--   **Forge**: Ethereum testing framework (like Truffle, Hardhat and DappTools).
--   **Cast**: Swiss army knife for interacting with EVM smart contracts, sending transactions and getting chain data.
--   **Anvil**: Local Ethereum node, akin to Ganache, Hardhat Network.
--   **Chisel**: Fast, utilitarian, and verbose solidity REPL.
+---
 
-## Documentation
+> **A verifiably fair, gas-efficient lottery system built on Ethereum, powered by Chainlink VRF v2.5, and deployed using the Factory pattern.**
+> Every lottery instance is decentralized, tamper-proof, and economically transparent.
 
-https://book.getfoundry.sh/
+---
 
-## Usage
+## ⚙️ Tech Stack
 
-### Build
+| Component       | Technology                       | Purpose                          |
+| --------------- | -------------------------------- | -------------------------------- |
+| Smart Contracts | **Solidity (0.8.x)**             | Core logic and VRF integration   |
+| Framework       | **Foundry (forge, cast)**        | Development, testing, deployment |
+| Randomness      | **Chainlink VRF v2.5**           | Secure and verifiable randomness |
+| Security        | **OpenZeppelin ReentrancyGuard** | Protects against reentrancy      |
+| Architecture    | **Factory Pattern**              | Scalable contract deployment     |
 
-```shell
-$ forge build
+---
+
+## 🧩 Architecture Overview
+
+The system is composed of two primary contracts:
+
+* **`LotteryFactory`** – Deploys and manages new `Lottery` instances. Handles subscription setup and ownership transfer for Chainlink VRF.
+* **`Lottery`** – The actual game logic. Manages participants, ticketing, randomness, and payouts.
+
+This separation makes the system modular, scalable, and easy to verify.
+
+---
+
+## 🔬 Key Design Choices
+
+### 🎲 1. Weighted Random Selection (Gas Efficient)
+
+Instead of storing each ticket separately (`O(tickets)`), the system stores **unique players only** and tracks their **ticket counts**.
+
+The winner is computed in `O(unique players)` time using a single random value from VRF.
+
+✅ Cheap entries
+✅ Predictable gas usage
+✅ Fully fair randomness
+
+---
+
+### 💰 2. Isolated Prize & Fee Pools
+
+| Pool           | Purpose                                         |
+| -------------- | ----------------------------------------------- |
+| `prizePool`    | 100% of ticket value — winner’s reward          |
+| `platformFees` | Operational costs (automation & gas incentives) |
+
+By separating pools, the **prize money remains untouched** and auditable.
+
+---
+
+### 🧱 3. Safe Payouts via Pull Pattern
+
+All external transfers follow the **Checks-Effects-Interactions (CEI)** model:
+
+* Balances are updated before transfers
+* Payouts are explicitly claimed (pull-based)
+* Protected by `ReentrancyGuard`
+
+This guarantees safety against reentrancy or state manipulation.
+
+---
+
+## 🔐 Security Model
+
+| Threat                  | Mitigation                             |
+| ----------------------- | -------------------------------------- |
+| Randomness manipulation | Chainlink VRF proofs                   |
+| Reentrancy              | CEI pattern + OpenZeppelin guard       |
+| Gas griefing            | Fixed callback gas limit               |
+| Prize pool theft        | Isolated pools & non-upgradable design |
+| Centralization risk     | Factory-driven deployments             |
+
+---
+
+## 🚀 Deployment (Sepolia Example)
+
+1. **Deploy the Factory**
+
+   ```solidity
+   factory = new LotteryFactory(subId, vrfCoordinator, linkToken, keyHash);
+   ```
+
+2. **Create and Fund a VRF Subscription**
+
+   ```solidity
+   subId = coord.createSubscription();
+   coord.fundSubscription(subId, 100 ether);
+   ```
+
+3. **Authorize Factory**
+
+   ```solidity
+   coord.requestSubscriptionOwnerTransfer(subId, address(factory));
+   factory.acceptSubscriptionOwnerTransfer(subId);
+   ```
+
+4. **Deploy a Lottery Instance**
+
+   ```solidity
+   factory.createLottery(ticketPrice, duration, maxPlayers);
+   ```
+
+---
+
+## 🧠 Lifecycle Overview
+
+| Stage          | Function                         | Triggered By | Description               |
+| -------------- | -------------------------------- | ------------ | ------------------------- |
+| 🎟 Enter       | `enter()`                        | Player       | Buy tickets               |
+| 🔒 Close       | `closeAndRequestWinner()`        | Any user     | Ends entry & requests VRF |
+| 🎲 Fulfill     | `fulfillRandomWords()`           | Chainlink    | VRF callback (automated)  |
+| 🏁 Finalize    | `finalizeWithStoredRandomness()` | Any user     | Computes winner           |
+| 💰 Claim Prize | `claimPrize()`                   | Winner       | Withdraw jackpot          |
+| ⚡ Claim Reward | `withdrawTriggerReward()`        | Caller       | Get trigger fee reward    |
+
+---
+
+## 🧪 Testing
+
+Test suite written in **Foundry** covering:
+
+* ✅ Full lifecycle simulation (entry → draw → finalize → payout)
+* ⚠️ Guard and revert conditions
+* 💸 Fee accounting and prize pool integrity
+* 🔍 Randomness verification
+
+```bash
+forge install
+forge test --via-ir --optimize
 ```
 
-### Test
+---
 
-```shell
-$ forge test
-```
+## ✅ Audit Readiness
 
-### Format
+This project follows **best practices** from CodeHawks and Chainlink’s VRF guidelines:
 
-```shell
-$ forge fmt
-```
+* Modular and dependency-isolated design
+* No unbounded loops or external dependencies during VRF usage
+* Strict CEI pattern and minimal state mutation
+* Clearly separated user funds and protocol fees
 
-### Gas Snapshots
+---
 
-```shell
-$ forge snapshot
-```
+## 🧭 Roadmap
 
-### Anvil
+* 🔁 Integrate Chainlink Automation for trustless draws
+* 🌐 Add a frontend dashboard (React + Wagmi)
+* 🎟 Loyalty and staking mechanisms for repeat players
 
-```shell
-$ anvil
-```
+---
 
-### Deploy
+## 👨‍💻 Author
 
-```shell
-$ forge script script/Counter.s.sol:CounterScript --rpc-url <your_rpc_url> --private-key <your_private_key>
-```
+**Kalyan TR**
+Smart Contract Engineer | Solidity & Web3
 
-### Cast
+[![GitHub](https://img.shields.io/badge/GitHub-tr--Kalyan-black?style=for-the-badge\&logo=github)](https://github.com/tr-Kalyan)
 
-```shell
-$ cast <subcommand>
-```
+---
 
-### Help
+## 📄 License
 
-```shell
-$ forge --help
-$ anvil --help
-$ cast --help
-```
+This project is licensed under the **MIT License** — see [LICENSE](LICENSE) for details.
+
+---

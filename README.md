@@ -2,9 +2,9 @@
 
 # 🏆 Decentralized Weighted Lottery (VRF v2.5)
 
-![Solidity](https://img.shields.io/badge/Solidity-0.8.x-2c2c2c?style=for-the-badge\&logo=solidity)
-![Foundry](https://img.shields.io/badge/Built%20With-Foundry-ff69b4?style=for-the-badge\&logo=ethereum)
-![Chainlink VRF](https://img.shields.io/badge/Chainlink-VRF%20v2.5-blue?style=for-the-badge\&logo=chainlink)
+![Solidity](https://img.shields.io/badge/Solidity-0.8.x-2c2c2c?style=for-the-badge&logo=solidity)
+![Foundry](https://img.shields.io/badge/Built%20With-Foundry-ff69b4?style=for-the-badge&logo=ethereum)
+![Chainlink VRF](https://img.shields.io/badge/Chainlink-VRF%20v2.5-blue?style=for-the-badge&logo=chainlink)
 ![Audit Ready](https://img.shields.io/badge/Audit-Ready-green?style=for-the-badge)
 ![License](https://img.shields.io/badge/License-MIT-yellow?style=for-the-badge)
 

@@ -8,7 +8,6 @@
 ![Audit Ready](https://img.shields.io/badge/Audit-Ready-green?style=for-the-badge)
 ![License](https://img.shields.io/badge/License-MIT-yellow?style=for-the-badge)
 
----
 
 > **A verifiably fair, gas-efficient lottery system built on Ethereum, powered by Chainlink VRF v2.5, and deployed using the Factory pattern.**
 > Every lottery instance is decentralized, tamper-proof, and economically transparent.

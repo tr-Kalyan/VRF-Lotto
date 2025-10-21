@@ -5,9 +5,12 @@ import {ReentrancyGuard} from "openzeppelin-contracts/contracts/utils/Reentrancy
 import {VRFConsumerBaseV2Plus} from "@chainlink/contracts/src/v0.8/vrf/dev/VRFConsumerBaseV2Plus.sol";
 import {IVRFCoordinatorV2Plus} from "@chainlink/contracts/src/v0.8/vrf/dev/interfaces/IVRFCoordinatorV2Plus.sol";
 import {VRFV2PlusClient} from "@chainlink/contracts/src/v0.8/vrf/dev/libraries/VRFV2PlusClient.sol";
-
+import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
+import "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 
 contract Lottery is  VRFConsumerBaseV2Plus, ReentrancyGuard {
+
+    using SafeERC20 for IERC20;
 
     // --- State variables ---
 
@@ -20,6 +23,10 @@ contract Lottery is  VRFConsumerBaseV2Plus, ReentrancyGuard {
         FINISHED
     }
 
+    // Token Variables
+    IERC20 public immutable i_paymentToken;
+
+
     // Core state
     LotteryState public lotteryState; // Current state of the lottery
     address[] private players;  // Array of players (each ticket = 1 entry)
@@ -27,10 +34,10 @@ contract Lottery is  VRFConsumerBaseV2Plus, ReentrancyGuard {
     uint256 public totalTickets; // Total tickets sold (for weighted randomness)
 
     // Configurable parameters
-    uint256 public maxPlayers;
-    uint256 public maxTicketsPerAddress;
-    uint256 public deadline;
-    uint256 public ticketPrice; // Fee per ticket in wei
+    uint256 public immutable maxPlayers;
+    uint256 public immutable maxTicketsPerAddress;
+    uint256 public immutable deadline;
+    uint256 public immutable ticketPrice; // Fee per ticket in wei
     uint256 public platformFees; // Fees collected to subsidize gas costs for automated game closure and winner selection.
 
     // Prize pool accounting
@@ -48,6 +55,7 @@ contract Lottery is  VRFConsumerBaseV2Plus, ReentrancyGuard {
     bool public prizeClaimed;
     mapping(address => uint256) public pendingRewards;  // Track withdrawable trigger rewards
     mapping(address => uint256) public fulfillCallReward; // Track withdrawable rewards for fulfill function call
+    mapping(address => uint256) public cancelTimeoutReward; // Track withdrawable rewards for calling cancelTimeout function
 
     // Chainlink VRF config
     IVRFCoordinatorV2Plus public immutable _COORDINATOR;
@@ -72,15 +80,19 @@ contract Lottery is  VRFConsumerBaseV2Plus, ReentrancyGuard {
     event TriggerRewardWithdrawn(address indexed claimer, uint256 amount);
     event FulfillCallRewardScheduled(address indexed claimer, uint256 amount);
     event FulfillCallRewardWithdrawn(address indexed claimer, uint amount);
+    event CancelTimeoutRewardScheduled(address indexed claimer, uint256 amount);
+    event CancelTimeoutRewardWithdrawn(address indexed claimer, uint256 amount);
     event WinnerRequested(uint256 requestId);
     event WinnerSelected(address indexed winner);
     event PrizeClaimed(address indexed winner, uint256 amount);
     event LotteryCancelled(string reason);
     event RandomnessStored(uint256 indexed requestId, uint256 randomWord);
     event FulfillmentIgnored(uint256 indexed requestId, string reason);
+    
 
     constructor(
         address _vrfCoordinator,
+        address _paymentTokenAddress,
         uint256 _ticketPrice,
         uint256 _maxPlayers,
         uint256 _duration,
@@ -96,6 +108,8 @@ contract Lottery is  VRFConsumerBaseV2Plus, ReentrancyGuard {
         require(_maxPlayers > 0, "INVALID_MAX_PLAYERS");
         require(_vrfRequestTimeoutSeconds >= 60 && _vrfRequestTimeoutSeconds <= 24 hours, "TIMEOUT_RANGE");
         require(_numWords >= 1, "NUM_WORDS");
+
+        i_paymentToken = IERC20(_paymentTokenAddress);
 
         ticketPrice = _ticketPrice;
         maxPlayers = _maxPlayers;
@@ -120,7 +134,7 @@ contract Lottery is  VRFConsumerBaseV2Plus, ReentrancyGuard {
 
     // Allows players to enter the lottery by buying tickets
     // Unique and New players added to the array
-    function enter(uint256 tickets) external payable {
+    function enter(uint256 tickets) external {
         require(lotteryState == LotteryState.OPEN, "LOTTERY_NOT_OPEN");
         require(block.timestamp < deadline, "DEADLINE_PASSED");
         require(tickets > 0 && tickets <= MAX_TICKETS_PER_TX, "INVALID_TICKET_COUNT");
@@ -132,8 +146,13 @@ contract Lottery is  VRFConsumerBaseV2Plus, ReentrancyGuard {
         uint256 ticketCost = tickets * ticketPrice;
         uint256 operationalCost = ticketCost / 100; // 1% fee for operations
         uint totalCost = ticketCost + operationalCost;
-        require(msg.value == totalCost, "INSUFFICIENT FUNDS");
 
+        bool success = i_paymentToken.safeTransferFrom(
+            msg.sender,
+            address(this),
+            totalCost
+        );
+        require(success, "TRANSFER_FAILED: Check Balance");
         // Store unique players's address only once
         if (ticketCount[msg.sender] == 0) {
             players.push(msg.sender);
@@ -174,13 +193,20 @@ contract Lottery is  VRFConsumerBaseV2Plus, ReentrancyGuard {
         // Single player → auto-win
         if (players.length == 1) {
             winner = players[0];
+
+            uint256 totalBalance = i_paymentToken.balanceOf(address(this));
+            prizePool = totalBalance - platformFees; // Set the prize pool for claiming
+            
+            uint256 rewardAmount = platformFees / 2; // Use 50% for reward
+            platformFees -= rewardAmount;
+            
             lotteryState = LotteryState.FINISHED;
             emit WinnerSelected(winner);
             return;
         }
 
         // Compute rewards and prize pool
-        uint256 totalBalance = address(this).balance;
+        uint256 totalBalance = i_paymentToken.balanceOf(address(this));
         prizePool = totalBalance - platformFees;
         uint256 rewardAmount = platformFees / 2; // use 50% for reward
         platformFees -= rewardAmount;
@@ -221,9 +247,11 @@ contract Lottery is  VRFConsumerBaseV2Plus, ReentrancyGuard {
     function withdrawTriggerReward() external nonReentrant {
         uint256 amt = pendingRewards[msg.sender];
         require(amt > 0, "NO_REWARD");
+
         pendingRewards[msg.sender] = 0;
-        (bool ok, ) = msg.sender.call{value: amt}("");
-        require(ok, "WITHDRAW_FAILED");
+
+        bool success = i_paymentToken.safeTransfer(msg.sender, amt);
+
         emit TriggerRewardWithdrawn(msg.sender, amt);
     }
 
@@ -312,9 +340,11 @@ contract Lottery is  VRFConsumerBaseV2Plus, ReentrancyGuard {
     function withdrawFulfillCallReward() external nonReentrant {
         uint256 amt = fulfillCallReward[msg.sender];
         require(amt > 0, "NO_REWARD");
+
         fulfillCallReward[msg.sender] = 0;
-        (bool ok, ) = msg.sender.call{value: amt}("");
-        require(ok, "WITHDRAW_FAILED");
+
+        bool success = i_paymentToken.safeTransfer(msg.sender, amt);
+
         emit FulfillCallRewardWithdrawn(msg.sender, amt);
     }
 
@@ -324,10 +354,28 @@ contract Lottery is  VRFConsumerBaseV2Plus, ReentrancyGuard {
         require(vrfRequestTimestamp != 0, "NO_VRF_REQUEST");
         require(block.timestamp >= vrfRequestTimestamp + _TIMEOUT, "NOT_TIMED_OUT");
 
+        uint256 cancelRewardAmount = platformFees;
+        platformFees = 0;
+        cancelTimeoutReward[msg.sender] = cancelRewardAmount;
+
         lotteryState = LotteryState.CANCELLED;
         vrfRequestTimestamp = 0;
 
         emit LotteryCancelled("VRF Timeout");
+        emit CancelTimeoutRewardScheduled(msg.sender, uint256 cancelRewardAmount);
+    }
+
+    // Allows caller to withdraw cancelTimeout function call reward
+    function withdrawCancelTimeoutReward() external {
+        uint256 amt = cancelTimeoutReward[msg.sender];
+        require(amt>0, "NO_REWARD");
+
+        cancelTimeoutReward[msg.sender] = 0;
+
+        bool success = i_paymentToken.safeTransfer(msg.sender, amt);
+
+        emit CancelTimeoutRewardWithdrawn(msg.sender, amt);
+
     }
 
     // Winner claims prize
@@ -336,11 +384,12 @@ contract Lottery is  VRFConsumerBaseV2Plus, ReentrancyGuard {
         require(msg.sender == winner, "Not winner");
         require(!prizeClaimed, "Prize already claimed");
 
+        uint256 prizeMoney = prizePool;
         prizeClaimed = true;
-        (bool success,) = msg.sender.call{value: prizePool}("");
-        require(success, "Transfer failed");
+        prizePool = 0;
+        bool success = i_paymentToken.safeTransfer(msg.sender, prizeMoney);
 
-        emit PrizeClaimed(msg.sender, prizePool);
+        emit PrizeClaimed(msg.sender, prizeMoney);
     }
 
     // Players can claim refund if round is cancelled
@@ -352,8 +401,7 @@ contract Lottery is  VRFConsumerBaseV2Plus, ReentrancyGuard {
         ticketCount[msg.sender] = 0;
         uint256 refundAmount = ticketsBought * ticketPrice;
 
-        (bool success,) = msg.sender.call{value: refundAmount}("");
-        require(success, "Refund failed");
+        bool success = i_paymentToken.safeTransfer(msg.sender,refundAmount);
 
         emit RefundClaimed(msg.sender, refundAmount);
     }
@@ -366,6 +414,29 @@ contract Lottery is  VRFConsumerBaseV2Plus, ReentrancyGuard {
         return balance >= ESTIMATED_LINK_COST;
     }
 
+    /**
+     * @notice Returns whether the VRF request has timed out and how much time is left
+     * @return shouldCancel True if timeout has expired and cancelIfTimedOut() can be safely called.
+     * @return timeRemainingSeconds Remaining seconds untill timeout expires (0 if expired or not applicable)
+     */
+    function VRFRequestTimeOutStatus() external view returns (bool shouldCancel, uint256 seconds) {
+        // If contract is not waiting for a VRF fufillment, no timeout check required
+
+        if (lotteryState != LotteryState.CALCULATING || vrfRequestTimestamp == 0) {
+            return (false, 0); // No timeout check required
+        }
+
+        uint256 timeOutAt = vrfRequestTimestamp+_TIMEOUT;
+
+        // If timeout passed, return 0 (no time left)
+        if (block.timestamp >= timeOutAt){
+            return (true, 0);
+        }
+
+        // Otherwise, return how many seconds are left
+        return timeOutAt - block.timestamp;
+    }
+
     // --- View helpers ---
     function getPlayersCount() external view returns (uint256) {
         return players.length;
@@ -376,6 +447,6 @@ contract Lottery is  VRFConsumerBaseV2Plus, ReentrancyGuard {
     }
 
     function getPot() external view returns (uint256) {
-        return address(this).balance;
+        return i_paymentToken.balanceOf(address(this));
     }
 }

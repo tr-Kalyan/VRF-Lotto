@@ -6,8 +6,6 @@ import {IERC20} from "openzeppelin-contracts/contracts/interfaces/IERC20.sol";
 import {IVRFCoordinatorV2Plus} from "@chainlink/contracts/src/v0.8/vrf/dev/interfaces/IVRFCoordinatorV2Plus.sol";
 import {IVRFSubscriptionV2Plus} from "@chainlink/contracts/src/v0.8/vrf/dev/interfaces/IVRFCoordinatorV2Plus.sol";
 
-
-
 contract LotteryFactory {
     address[] public allLotteries;
     uint256 public vrfSubscriptionId; // Chainlink VRF subscription ID (shared across all lotteries)
@@ -44,6 +42,7 @@ contract LotteryFactory {
      */
     function createLottery(
         uint256 _ticketPrice,
+        address _paymentTokenAddress,
         uint256 maxPlayers,
         uint256 lotteryDurationSeconds,
         uint32 _callbackGasLimit,
@@ -55,6 +54,7 @@ contract LotteryFactory {
         // Deply new Lottery contract
         Lottery newLottery = new Lottery(
             address(vrfCoordinator),
+            _paymentTokenAddress,
             _ticketPrice,
             maxPlayers,
             lotteryDurationSeconds,

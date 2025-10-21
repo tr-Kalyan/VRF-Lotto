@@ -37,6 +37,15 @@ This separation makes the system modular, scalable, and easy to verify.
 
 ---
 
+### ⚙️ LINK Subscription Assumption
+
+* For simplicity, the current version assumes the **Chainlink VRF subscription** is pre-funded with sufficient LINK.  
+* In production, an **automated top-up mechanism** or **dynamic LINK reserve system** would be added.  
+
+* The focus of this project is on **contract integrity, fairness, and DeFi-grade reward flow design**, not off-chain funding logistics.
+
+---
+
 ## 🔬 Key Design Choices
 
 ### 🎲 1. Weighted Random Selection (Gas Efficient)

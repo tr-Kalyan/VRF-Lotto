@@ -39,14 +39,17 @@ contract Lottery is  VRFConsumerBaseV2Plus, ReentrancyGuard {
     uint256 public immutable deadline;
     uint256 public immutable ticketPrice; // Fee per ticket in wei
     uint256 public platformFees; // Fees collected to subsidize gas costs for automated game closure and winner selection.
+    
 
     // Prize pool accounting
     uint256 public prizePool;       // Total prize (excludes trigger reward)
+    uint256 public triggerRewardPool;
+    uint256 public finalizerRewardPool;
 
 
     // VRF tracking
     uint256 private vrfRequestTimestamp; // Timestamp of last randomness request
-    uint256 public immutable _TIMEOUT;  // How long before VRF can be considered timed out
+    uint256 public immutable i_vrfTimeOut;  // How long before VRF can be considered timed out
     uint256 public constant MAX_TICKETS_PER_TX = 100;
 
     // Outcome variables
@@ -127,7 +130,7 @@ contract Lottery is  VRFConsumerBaseV2Plus, ReentrancyGuard {
         _CALLBACKGASLIMIT = _callbackGasLimit;
         _REQUESTCONFIRMATIONS = _requestConfirmations;
         _NUMWORDS = _numWords;
-        _TIMEOUT = _vrfRequestTimeoutSeconds;
+        i_vrfTimeOut = _vrfRequestTimeoutSeconds;
     }
 
     // --- Core functions ---
@@ -147,12 +150,12 @@ contract Lottery is  VRFConsumerBaseV2Plus, ReentrancyGuard {
         uint256 operationalCost = ticketCost / 100; // 1% fee for operations
         uint totalCost = ticketCost + operationalCost;
 
-        bool success = i_paymentToken.safeTransferFrom(
+        i_paymentToken.safeTransferFrom(
             msg.sender,
             address(this),
             totalCost
         );
-        require(success, "TRANSFER_FAILED: Check Balance");
+
         // Store unique players's address only once
         if (ticketCount[msg.sender] == 0) {
             players.push(msg.sender);
@@ -197,19 +200,19 @@ contract Lottery is  VRFConsumerBaseV2Plus, ReentrancyGuard {
             uint256 totalBalance = i_paymentToken.balanceOf(address(this));
             prizePool = totalBalance - platformFees; // Set the prize pool for claiming
             
-            uint256 rewardAmount = platformFees / 2; // Use 50% for reward
-            platformFees -= rewardAmount;
+            pendingRewards[msg.sender] += platformFees;
+            emit TriggerRewardScheduled(msg.sender, platformFees);
+            platformFees = 0;
             
             lotteryState = LotteryState.FINISHED;
             emit WinnerSelected(winner);
             return;
         }
 
-        // Compute rewards and prize pool
-        uint256 totalBalance = i_paymentToken.balanceOf(address(this));
-        prizePool = totalBalance - platformFees;
-        uint256 rewardAmount = platformFees / 2; // use 50% for reward
-        platformFees -= rewardAmount;
+        // Compute rewards 
+        
+        triggerRewardPool = platformFees / 2; // use 50% for reward
+        finalizerRewardPool = platformFees - triggerRewardPool;  // rest 50% for finalize reward, paid only after VRF
         
 
         lotteryState = LotteryState.CALCULATING;
@@ -236,10 +239,11 @@ contract Lottery is  VRFConsumerBaseV2Plus, ReentrancyGuard {
         vrfRequestTimestamp = block.timestamp;
 
         // Reward caller who triggered VRF
-        pendingRewards[msg.sender] += rewardAmount;
+        pendingRewards[msg.sender] += triggerRewardPool;
+        emit TriggerRewardScheduled(msg.sender, triggerRewardPool);
+        triggerRewardPool = 0;
 
-
-        emit TriggerRewardScheduled(msg.sender, rewardAmount);
+        
         emit WinnerRequested(s_requestId);
     }
 
@@ -250,7 +254,7 @@ contract Lottery is  VRFConsumerBaseV2Plus, ReentrancyGuard {
 
         pendingRewards[msg.sender] = 0;
 
-        bool success = i_paymentToken.safeTransfer(msg.sender, amt);
+        i_paymentToken.safeTransfer(msg.sender, amt);
 
         emit TriggerRewardWithdrawn(msg.sender, amt);
     }
@@ -329,10 +333,14 @@ contract Lottery is  VRFConsumerBaseV2Plus, ReentrancyGuard {
 
         lotteryState = LotteryState.FINISHED;
 
-        fulfillCallReward[msg.sender] = platformFees;
-        platformFees = 0;
+        uint256 totalBalance = i_paymentToken.balanceOf(address(this));
+        prizePool = totalBalance - platformFees;
 
-        emit FulfillCallRewardScheduled(msg.sender, fulfillCallReward[msg.sender]);
+        fulfillCallReward[msg.sender] = finalizerRewardPool;
+        emit FulfillCallRewardScheduled(msg.sender, fulfillCallRewardPool);
+        finalizerRewardPool = 0;
+
+        
         emit WinnerSelected(winner);
     }
 
@@ -343,16 +351,16 @@ contract Lottery is  VRFConsumerBaseV2Plus, ReentrancyGuard {
 
         fulfillCallReward[msg.sender] = 0;
 
-        bool success = i_paymentToken.safeTransfer(msg.sender, amt);
+        i_paymentToken.safeTransfer(msg.sender, amt);
 
         emit FulfillCallRewardWithdrawn(msg.sender, amt);
     }
 
     // Cancel if VRF response has timed out
-    function cancelIfTimedOut() external {
+    function cancelIfTimedOut() external nonReentrant {
         require(lotteryState == LotteryState.CALCULATING, "BAD_STATE");
         require(vrfRequestTimestamp != 0, "NO_VRF_REQUEST");
-        require(block.timestamp >= vrfRequestTimestamp + _TIMEOUT, "NOT_TIMED_OUT");
+        require(block.timestamp >= vrfRequestTimestamp + i_vrfTimeOut, "NOT_TIMED_OUT");
 
         uint256 cancelRewardAmount = platformFees;
         platformFees = 0;
@@ -362,7 +370,7 @@ contract Lottery is  VRFConsumerBaseV2Plus, ReentrancyGuard {
         vrfRequestTimestamp = 0;
 
         emit LotteryCancelled("VRF Timeout");
-        emit CancelTimeoutRewardScheduled(msg.sender, uint256 cancelRewardAmount);
+        emit CancelTimeoutRewardScheduled(msg.sender, cancelRewardAmount);
     }
 
     // Allows caller to withdraw cancelTimeout function call reward
@@ -372,7 +380,7 @@ contract Lottery is  VRFConsumerBaseV2Plus, ReentrancyGuard {
 
         cancelTimeoutReward[msg.sender] = 0;
 
-        bool success = i_paymentToken.safeTransfer(msg.sender, amt);
+        i_paymentToken.safeTransfer(msg.sender, amt);
 
         emit CancelTimeoutRewardWithdrawn(msg.sender, amt);
 
@@ -387,7 +395,7 @@ contract Lottery is  VRFConsumerBaseV2Plus, ReentrancyGuard {
         uint256 prizeMoney = prizePool;
         prizeClaimed = true;
         prizePool = 0;
-        bool success = i_paymentToken.safeTransfer(msg.sender, prizeMoney);
+        i_paymentToken.safeTransfer(msg.sender, prizeMoney);
 
         emit PrizeClaimed(msg.sender, prizeMoney);
     }
@@ -401,7 +409,7 @@ contract Lottery is  VRFConsumerBaseV2Plus, ReentrancyGuard {
         ticketCount[msg.sender] = 0;
         uint256 refundAmount = ticketsBought * ticketPrice;
 
-        bool success = i_paymentToken.safeTransfer(msg.sender,refundAmount);
+        i_paymentToken.safeTransfer(msg.sender,refundAmount);
 
         emit RefundClaimed(msg.sender, refundAmount);
     }
@@ -415,18 +423,18 @@ contract Lottery is  VRFConsumerBaseV2Plus, ReentrancyGuard {
     }
 
     /**
-     * @notice Returns whether the VRF request has timed out and how much time is left
-     * @return shouldCancel True if timeout has expired and cancelIfTimedOut() can be safely called.
+     * @dev Returns whether the VRF request has timed out and how much time is left
+     * @return shouldCancel True if timeout has expired and cancelIfTimedOut() can be safely called. 
      * @return timeRemainingSeconds Remaining seconds untill timeout expires (0 if expired or not applicable)
-     */
-    function VRFRequestTimeOutStatus() external view returns (bool shouldCancel, uint256 seconds) {
+    */
+    function VRFRequestTimeOutStatus() external view returns (bool shouldCancel, uint256 timeRemaining) {
         // If contract is not waiting for a VRF fufillment, no timeout check required
 
         if (lotteryState != LotteryState.CALCULATING || vrfRequestTimestamp == 0) {
             return (false, 0); // No timeout check required
         }
 
-        uint256 timeOutAt = vrfRequestTimestamp+_TIMEOUT;
+        uint256 timeOutAt = vrfRequestTimestamp+i_vrfTimeOut;
 
         // If timeout passed, return 0 (no time left)
         if (block.timestamp >= timeOutAt){
@@ -434,7 +442,7 @@ contract Lottery is  VRFConsumerBaseV2Plus, ReentrancyGuard {
         }
 
         // Otherwise, return how many seconds are left
-        return timeOutAt - block.timestamp;
+        return (false, timeOutAt - block.timestamp);
     }
 
     // --- View helpers ---

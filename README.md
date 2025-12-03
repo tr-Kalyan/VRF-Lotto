@@ -5,12 +5,12 @@
 ![Solidity](https://img.shields.io/badge/Solidity-0.8.x-2c2c2c?style=for-the-badge&logo=solidity)
 ![Foundry](https://img.shields.io/badge/Built%20With-Foundry-ff69b4?style=for-the-badge&logo=ethereum)
 ![Chainlink VRF](https://img.shields.io/badge/Chainlink-VRF%20v2.5-blue?style=for-the-badge&logo=chainlink)
-![Audit Ready](https://img.shields.io/badge/Audit-Ready-green?style=for-the-badge)
+![Security-Focused](https://img.shields.io/badge/Security--Focused-brightgreen?style=for-the-badge)
 ![License](https://img.shields.io/badge/License-MIT-yellow?style=for-the-badge)
 
 
 > **A verifiably fair, gas-efficient lottery system built on Ethereum, powered by Chainlink VRF v2.5, and deployed using the Factory pattern.**
-> Every lottery instance is decentralized, tamper-proof, and economically transparent.
+> Fully on-chain, transparent lottery with economic incentives for automation.
 
 ---
 
@@ -154,7 +154,7 @@ forge test --via-ir --optimize
 
 ---
 
-## ✅ Audit Readiness
+## ✅ Security-Focused
 
 This project follows **best practices** from CodeHawks and Chainlink’s VRF guidelines:
 
@@ -163,20 +163,16 @@ This project follows **best practices** from CodeHawks and Chainlink’s VRF gui
 * Strict CEI pattern and minimal state mutation
 * Clearly separated user funds and protocol fees
 
----
-
-## 🧭 Roadmap
-
-* 🔁 Integrate Chainlink Automation for trustless draws
-* 🌐 Add a frontend dashboard (React + Wagmi)
-* 🎟 Loyalty and staking mechanisms for repeat players
 
 ---
 
 ## 👨‍💻 Author
 
 **Kalyan TR**
-Smart Contract Engineer | Solidity & Web3
+
+> Former regulated-domain QA (Finance + Healthcare) → transitioning to Web3 Security
+Active on CodeHawks & Code4rena
+
 
 [![GitHub](https://img.shields.io/badge/GitHub-tr--Kalyan-black?style=for-the-badge\&logo=github)](https://github.com/tr-Kalyan)
 

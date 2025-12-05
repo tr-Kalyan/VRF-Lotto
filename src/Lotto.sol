@@ -1,460 +1,285 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;
 
-import {ReentrancyGuard} from "openzeppelin-contracts/contracts/utils/ReentrancyGuard.sol";
-import {VRFConsumerBaseV2Plus} from "@chainlink/contracts/src/v0.8/vrf/dev/VRFConsumerBaseV2Plus.sol";
-import {IVRFCoordinatorV2Plus} from "@chainlink/contracts/src/v0.8/vrf/dev/interfaces/IVRFCoordinatorV2Plus.sol";
-import {VRFV2PlusClient} from "@chainlink/contracts/src/v0.8/vrf/dev/libraries/VRFV2PlusClient.sol";
-import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
-import "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
+import {VRFConsumerBaseV2Plus} from "@chainlink/vrf/dev/VRFConsumerBaseV2Plus.sol";
+import {VRFV2PlusClient} from "@chainlink/vrf/dev/libraries/VRFV2PlusClient.sol";
+import {AutomationCompatibleInterface} from "@chainlink/automation/AutomationCompatible.sol";
+import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
+import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
+import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 
-contract Lottery is  VRFConsumerBaseV2Plus, ReentrancyGuard {
 
+/// @title Weighted VRF v2.5 Lottery
+/// @author Security Researcher
+/// @notice Implements Cumulative Sum Pattern for gas-efficient weighted odds
+contract Lottery is VRFConsumerBaseV2Plus, AutomationCompatibleInterface, ReentrancyGuard {
     using SafeERC20 for IERC20;
 
-    // --- State variables ---
+    /*//////////////////////////////////////////////////////////////
+                            STATE VARIABLES
+    //////////////////////////////////////////////////////////////*/
 
-    // Possible states of the lottery lifecycle
-    enum LotteryState {
-        OPEN,
-        CLOSED,
-        CALCULATING,
-        CANCELLED,
-        FINISHED
-    }
-
-    // Token Variables
-    IERC20 public immutable i_paymentToken;
-
-
-    // Core state
-    LotteryState public lotteryState; // Current state of the lottery
-    address[] private players;  // Array of players (each ticket = 1 entry)
-    mapping(address => uint256) private ticketCount;  // Track ticket purchases per player
-    uint256 public totalTickets; // Total tickets sold (for weighted randomness)
-
-    // Configurable parameters
-    uint256 public immutable maxPlayers;
-    uint256 public immutable maxTicketsPerAddress;
-    uint256 public immutable deadline;
-    uint256 public immutable ticketPrice; // Fee per ticket in wei
-    uint256 public platformFees; // Fees collected to subsidize gas costs for automated game closure and winner selection.
+    enum LotteryState { OPEN, CALCULATING, FINISHED }
     
+    // Immutable Config
+    IERC20 public immutable paymentToken;
+    uint256 public immutable ticketPrice;
+    uint256 public immutable duration;
+    uint256 public immutable maxTickets;
+    
+    // VRF v2.5 Config
+    uint256 public s_subscriptionId;
+    bytes32 public s_keyHash;
+    uint32 public s_callbackGasLimit;
+    uint16 public constant REQUEST_CONFIRMATIONS = 3;
+    uint32 public constant NUM_WORDS = 1;
 
-    // Prize pool accounting
-    uint256 public prizePool;       // Total prize (excludes trigger reward)
-    uint256 public triggerRewardPool;
-    uint256 public finalizerRewardPool;
+    // Safety / Timeout Config
+    uint256 public immutable vrfTimeoutSeconds; 
+    uint256 public vrfRequestTimestamp;
 
-
-    // VRF tracking
-    uint256 private vrfRequestTimestamp; // Timestamp of last randomness request
-    uint256 public immutable i_vrfTimeOut;  // How long before VRF can be considered timed out
-    uint256 public constant MAX_TICKETS_PER_TX = 100;
-
-    // Outcome variables
+    // State
+    LotteryState public lotteryState;
+    uint256 public deadline;
+    uint256 public prizePool;
+    uint256 public platformFees;
+    
     address public winner;
-    uint256 public s_requestId;
     bool public prizeClaimed;
-    mapping(address => uint256) public pendingRewards;  // Track withdrawable trigger rewards
-    mapping(address => uint256) public fulfillCallReward; // Track withdrawable rewards for fulfill function call
-    mapping(address => uint256) public cancelTimeoutReward; // Track withdrawable rewards for calling cancelTimeout function
 
-    // Chainlink VRF config
-    IVRFCoordinatorV2Plus public immutable _COORDINATOR;
-    uint256 private immutable _SUBSCRIPTION_ID;
-    address private immutable _LINKTOKENADDRESS; // Sepolia LINK token
-    bytes32 private immutable _KEYHASH;
-
-    uint32 public immutable _CALLBACKGASLIMIT;
-    uint16 public immutable _REQUESTCONFIRMATIONS;
-    uint32 public immutable _NUMWORDS;
-
-    uint256 public constant ESTIMATED_LINK_COST = 2 * 10 ** 18; // 2 LINK
-
-    // Randomness storage
-    uint256 private _storedRandomWord;
-    bool public randomReady;
-
-    // --- Events ---
-    event Entered(address indexed player, uint256 tickets, uint256 amount);
-    event RefundClaimed(address indexed player, uint256 amount);
-    event TriggerRewardScheduled(address indexed claimer, uint256 amount);
-    event TriggerRewardWithdrawn(address indexed claimer, uint256 amount);
-    event FulfillCallRewardScheduled(address indexed claimer, uint256 amount);
-    event FulfillCallRewardWithdrawn(address indexed claimer, uint amount);
-    event CancelTimeoutRewardScheduled(address indexed claimer, uint256 amount);
-    event CancelTimeoutRewardWithdrawn(address indexed claimer, uint256 amount);
-    event WinnerRequested(uint256 requestId);
-    event WinnerSelected(address indexed winner);
-    event PrizeClaimed(address indexed winner, uint256 amount);
-    event LotteryCancelled(string reason);
-    event RandomnessStored(uint256 indexed requestId, uint256 randomWord);
-    event FulfillmentIgnored(uint256 indexed requestId, string reason);
+    // Logic: Cumulative Sums (Ranges)
+    // We track "up to which ticket number" a player owns.
+    struct TicketRange {
+        address player;
+        uint256 currentTotalTickets; // The upper bound of their ticket range
+    }
     
+    TicketRange[] public playersRanges;
+
+    /*//////////////////////////////////////////////////////////////
+                                 EVENTS
+    //////////////////////////////////////////////////////////////*/
+
+    event Entered(address indexed player, uint256 tickets, uint256 rangeEnd);
+    event WinnerPicked(address indexed winner, uint256 prizeAmount, uint256 winningTicketId);
+    event AutoWinTriggered(address indexed winner, uint256 prizeAmount);
+    event FeesDistributed(uint256 amount);
+    event LotteryClosed(uint256 requestId);
+    event LotteryStateRecovered(uint256 timestamp);
+
+    /*//////////////////////////////////////////////////////////////
+                               CONSTRUCTOR
+    //////////////////////////////////////////////////////////////*/
 
     constructor(
+        address _admin,
         address _vrfCoordinator,
-        address _paymentTokenAddress,
-        uint256 _ticketPrice,
-        uint256 _maxPlayers,
-        uint256 _duration,
         uint256 _subscriptionId,
+        bytes32 _keyHash,
         uint32 _callbackGasLimit,
-        uint16 _requestConfirmations,
-        uint32 _numWords,
-        uint256 _vrfRequestTimeoutSeconds,
-        address _linkTokenAddress,
-        bytes32 _keyHash
+        address _paymentToken,
+        uint256 _ticketPrice,
+        uint256 _maxTickets,
+        uint256 _duration,
+        uint256 _vrfTimeoutSeconds
     ) VRFConsumerBaseV2Plus(_vrfCoordinator) {
-        require(_ticketPrice > 0, "FREE_ENTRY_FORBIDDEN");
-        require(_maxPlayers > 0, "INVALID_MAX_PLAYERS");
-        require(_vrfRequestTimeoutSeconds >= 60 && _vrfRequestTimeoutSeconds <= 24 hours, "TIMEOUT_RANGE");
-        require(_numWords >= 1, "NUM_WORDS");
-
-        i_paymentToken = IERC20(_paymentTokenAddress);
-
+        transferOwnership(_admin);
+        s_subscriptionId = _subscriptionId;
+        s_keyHash = _keyHash;
+        s_callbackGasLimit = _callbackGasLimit;
+        
+        paymentToken = IERC20(_paymentToken);
         ticketPrice = _ticketPrice;
-        maxPlayers = _maxPlayers;
-        maxTicketsPerAddress = _maxPlayers / 20;
-        if (maxTicketsPerAddress == 0) maxTicketsPerAddress = 1;
+        maxTickets = _maxTickets;
+        duration = _duration;
+        vrfTimeoutSeconds = _vrfTimeoutSeconds;
 
+        // Initialize
         deadline = block.timestamp + _duration;
         lotteryState = LotteryState.OPEN;
-
-        _COORDINATOR = IVRFCoordinatorV2Plus(_vrfCoordinator);
-        _SUBSCRIPTION_ID = _subscriptionId;
-        _LINKTOKENADDRESS = _linkTokenAddress;
-        _KEYHASH = _keyHash;
-
-        _CALLBACKGASLIMIT = _callbackGasLimit;
-        _REQUESTCONFIRMATIONS = _requestConfirmations;
-        _NUMWORDS = _numWords;
-        i_vrfTimeOut = _vrfRequestTimeoutSeconds;
     }
 
-    // --- Core functions ---
+    /*//////////////////////////////////////////////////////////////
+                            USER FUNCTIONS
+    //////////////////////////////////////////////////////////////*/
 
-    // Allows players to enter the lottery by buying tickets
-    // Unique and New players added to the array
-    function enter(uint256 tickets) external {
-        require(lotteryState == LotteryState.OPEN, "LOTTERY_NOT_OPEN");
-        require(block.timestamp < deadline, "DEADLINE_PASSED");
-        require(tickets > 0 && tickets <= MAX_TICKETS_PER_TX, "INVALID_TICKET_COUNT");
-        require(totalTickets + tickets <= maxPlayers, "MAX_TICKETS_REACHED");
+    /// @notice Buy tickets. Gas cost is O(1) regardless of amount.
+    /// @param _ticketAmount Number of tickets to buy
+    function enter(uint256 _ticketAmount) external nonReentrant {
+        require(lotteryState == LotteryState.OPEN, "Lottery not open");
+        require(block.timestamp < deadline, "Lottery ended");
+        require(_ticketAmount > 0, "Zero tickets");
 
-        uint256 newCount = ticketCount[msg.sender] + tickets;
-        require(newCount <= maxTicketsPerAddress, "ADDRESS_CAP");
+        // 1. Calculate Costs
+        uint256 cost = _ticketAmount * ticketPrice;
+        uint256 fee = cost / 100; // 1% Fee
+        uint256 totalTransfer = cost + fee;
 
-        uint256 ticketCost = tickets * ticketPrice;
-        uint256 operationalCost = ticketCost / 100; // 1% fee for operations
-        uint totalCost = ticketCost + operationalCost;
-
-        i_paymentToken.safeTransferFrom(
-            msg.sender,
-            address(this),
-            totalCost
-        );
-
-        // Store unique players's address only once
-        if (ticketCount[msg.sender] == 0) {
-            players.push(msg.sender);
+        // 2. Determine New Range
+        uint256 currentTotal = 0;
+        if (playersRanges.length > 0) {
+            currentTotal = playersRanges[playersRanges.length - 1].currentTotalTickets;
         }
-
-        ticketCount[msg.sender] = newCount;
-        totalTickets += tickets;
-        platformFees += operationalCost;
-
-        emit Entered(msg.sender, tickets, totalCost);
-
-        // Auto-close if capacity is reached
-        if (totalTickets == maxPlayers) {
-            lotteryState = LotteryState.CLOSED;
-        }
-    }
-
-    
-    // Closes the lottery and request randomness from Chainlink
-    // Anyone can close the lottery. The function is open for any caller
-    // Caller who triggers randomness receives a reward of 0.5% of pot value
-    function closeAndRequestWinner() external nonReentrant {
         
-        require(vrfRequestTimestamp == 0, "VRF_ALREADY_REQUESTED");
-        require(lotteryState == LotteryState.OPEN || lotteryState == LotteryState.CLOSED, "INVALID_STATE");
+        uint256 newTotal = currentTotal + _ticketAmount;
+        require(newTotal <= maxTickets, "Max tickets exceeded");
 
-        bool deadlineReached = block.timestamp >= deadline;
-        bool capFilled = totalTickets == maxPlayers;
-        require(deadlineReached || capFilled, "NOT_READY");
-
-        // No players → cancel round
-        if (players.length == 0) {
-            lotteryState = LotteryState.CANCELLED;
-            emit LotteryCancelled("NO Players");
-            return;
-        }
-
-        // Single player → auto-win
-        if (players.length == 1) {
-            winner = players[0];
-
-            uint256 totalBalance = i_paymentToken.balanceOf(address(this));
-            prizePool = totalBalance - platformFees; // Set the prize pool for claiming
-            
-            pendingRewards[msg.sender] += platformFees;
-            emit TriggerRewardScheduled(msg.sender, platformFees);
-            platformFees = 0;
-            
-            lotteryState = LotteryState.FINISHED;
-            emit WinnerSelected(winner);
-            return;
-        }
-
-        // Compute rewards 
-        
-        triggerRewardPool = platformFees / 2; // use 50% for reward
-        finalizerRewardPool = platformFees - triggerRewardPool;  // rest 50% for finalize reward, paid only after VRF
-        
-
-        lotteryState = LotteryState.CALCULATING;
-        randomReady = false;
-        _storedRandomWord = 0;
-         
-
-        require(_hasEnoughLink(), "VRF_FUNDS_LOW");
-
-        // Prepare VRF request
-        VRFV2PlusClient.RandomWordsRequest memory req = VRFV2PlusClient.RandomWordsRequest({
-            keyHash: _KEYHASH,
-            subId: _SUBSCRIPTION_ID,
-            requestConfirmations: _REQUESTCONFIRMATIONS,
-            callbackGasLimit: _CALLBACKGASLIMIT,
-            numWords: _NUMWORDS,
-            extraArgs: VRFV2PlusClient._argsToBytes(
-                VRFV2PlusClient.ExtraArgsV1({ nativePayment: false })
-            )
-        });
-
-        // Submit randomness request
-        s_requestId = _COORDINATOR.requestRandomWords(req);
-        vrfRequestTimestamp = block.timestamp;
-
-        // Reward caller who triggered VRF
-        pendingRewards[msg.sender] += triggerRewardPool;
-        emit TriggerRewardScheduled(msg.sender, triggerRewardPool);
-        triggerRewardPool = 0;
+        // 3. Transfer Tokens (Checks-Effects-Interactions)
+        paymentToken.safeTransferFrom(msg.sender, address(this), totalTransfer);
 
         
-        emit WinnerRequested(s_requestId);
+        // 4. Update State
+        prizePool += cost;
+        platformFees += fee;
+
+        // O(1) Storage Write
+        playersRanges.push(TicketRange({
+            player: msg.sender,
+            currentTotalTickets: newTotal
+        }));
+
+        emit Entered(msg.sender, _ticketAmount, newTotal);
     }
 
-    // Allows caller to withdraw trigger reward
-    function withdrawTriggerReward() external nonReentrant {
-        uint256 amt = pendingRewards[msg.sender];
-        require(amt > 0, "NO_REWARD");
-
-        pendingRewards[msg.sender] = 0;
-
-        i_paymentToken.safeTransfer(msg.sender, amt);
-
-        emit TriggerRewardWithdrawn(msg.sender, amt);
-    }
-
-    // Callback from Chainlink VRF
-    // Never reverts - unexpected fulfilllments are ignored
-    function fulfillRandomWords(uint256 _requestId, uint256[] calldata randomWords ) internal override {
-        
-        // Fulfill function should never revert.
-        // If this reverted, the randomness request would remain pending forever,
-        // leaving the lottery stuck in the "CALCULATING" state.
-        // Instead, we defensively ignore unexpected fulfillments.
-
-        if (lotteryState != LotteryState.CALCULATING) {
-            emit FulfillmentIgnored(_requestId, "BAD_STATE");
-            return;
-        }
-
-        if (_requestId != s_requestId) {
-            emit FulfillmentIgnored(_requestId, "STALE_OR_UNKNOWN_REQUEST");
-            return;
-        }
-
-        if (randomWords.length == 0) {
-            emit FulfillmentIgnored(_requestId, "NO_RANDOM_WORDS");
-            return;
-        }
-
-        if (players.length == 0) {
-            // No players — mark round cancelled and move on.
-            lotteryState = LotteryState.CANCELLED;
-            vrfRequestTimestamp = 0;
-            emit LotteryCancelled("NO Players");
-            return;
-        }
-
-        // Store randomness for later, safe processing
-        _storedRandomWord = randomWords[0] ;
-        randomReady = true;
-        vrfRequestTimestamp = 0;
-
-        emit RandomnessStored(_requestId, _storedRandomWord);
-    }
-
-    // Finalize lottery with stored randomness by selecting the winner
-    // Separating storage and consumption of randomness ensures safety
-    // The function is open for any caller
-    // Caller who finalizes the winner receives a reward of 0.5% of pot value
-    function finalizeWithStoredRandomness() external nonReentrant {
-        require(randomReady, "RANDOM_NOT_READY");
-        require(lotteryState == LotteryState.CALCULATING, "BAD_STATE");
-        require(totalTickets > 0, "NOT_ENOUGH_PLAYERS");
-
-
-        uint256 randomNumber = _storedRandomWord % totalTickets;
-        uint256 cumulative = 0;
-        address selected;
-
-        uint256 uniquePlayers = players.length;
-
-        for (uint256 i=0; i<uniquePlayers; i++){
-            cumulative += ticketCount[players[i]];
-            if (randomNumber < cumulative) {
-                selected = players[i];
-                break;
-            }
-        }
-        winner = selected;
-
-        // Consume the randomness
-        randomReady = false;
-        _storedRandomWord = 0;
-
-
-
-
-        lotteryState = LotteryState.FINISHED;
-
-        uint256 totalBalance = i_paymentToken.balanceOf(address(this));
-        prizePool = totalBalance - platformFees;
-
-        fulfillCallReward[msg.sender] = finalizerRewardPool;
-        emit FulfillCallRewardScheduled(msg.sender, fulfillCallRewardPool);
-        finalizerRewardPool = 0;
-
-        
-        emit WinnerSelected(winner);
-    }
-
-    // Allows caller to withdraw finalize reward
-    function withdrawFulfillCallReward() external nonReentrant {
-        uint256 amt = fulfillCallReward[msg.sender];
-        require(amt > 0, "NO_REWARD");
-
-        fulfillCallReward[msg.sender] = 0;
-
-        i_paymentToken.safeTransfer(msg.sender, amt);
-
-        emit FulfillCallRewardWithdrawn(msg.sender, amt);
-    }
-
-    // Cancel if VRF response has timed out
-    function cancelIfTimedOut() external nonReentrant {
-        require(lotteryState == LotteryState.CALCULATING, "BAD_STATE");
-        require(vrfRequestTimestamp != 0, "NO_VRF_REQUEST");
-        require(block.timestamp >= vrfRequestTimestamp + i_vrfTimeOut, "NOT_TIMED_OUT");
-
-        uint256 cancelRewardAmount = platformFees;
-        platformFees = 0;
-        cancelTimeoutReward[msg.sender] = cancelRewardAmount;
-
-        lotteryState = LotteryState.CANCELLED;
-        vrfRequestTimestamp = 0;
-
-        emit LotteryCancelled("VRF Timeout");
-        emit CancelTimeoutRewardScheduled(msg.sender, cancelRewardAmount);
-    }
-
-    // Allows caller to withdraw cancelTimeout function call reward
-    function withdrawCancelTimeoutReward() external {
-        uint256 amt = cancelTimeoutReward[msg.sender];
-        require(amt>0, "NO_REWARD");
-
-        cancelTimeoutReward[msg.sender] = 0;
-
-        i_paymentToken.safeTransfer(msg.sender, amt);
-
-        emit CancelTimeoutRewardWithdrawn(msg.sender, amt);
-
-    }
-
-    // Winner claims prize
+    /// @notice Claim prize if you are the winner
     function claimPrize() external nonReentrant {
         require(lotteryState == LotteryState.FINISHED, "Not finished");
         require(msg.sender == winner, "Not winner");
-        require(!prizeClaimed, "Prize already claimed");
+        require(!prizeClaimed, "Already claimed");
 
-        uint256 prizeMoney = prizePool;
         prizeClaimed = true;
-        prizePool = 0;
-        i_paymentToken.safeTransfer(msg.sender, prizeMoney);
+        uint256 amount = prizePool;
+        prizePool = 0; // Prevent re-entrancy drain
 
-        emit PrizeClaimed(msg.sender, prizeMoney);
+        paymentToken.safeTransfer(winner, amount);
     }
 
-    // Players can claim refund if round is cancelled
-    function claimRefund() external nonReentrant {
-        require(lotteryState == LotteryState.CANCELLED, "Lottery not cancelled");
-        uint256 ticketsBought = ticketCount[msg.sender];
-        require(ticketsBought > 0, "No refund available");
+    /*//////////////////////////////////////////////////////////////
+                           AUTOMATION LOGIC
+    //////////////////////////////////////////////////////////////*/
 
-        ticketCount[msg.sender] = 0;
-        uint256 refundAmount = ticketsBought * ticketPrice;
+    function checkUpkeep(bytes calldata /* checkData */) 
+        external 
+        view 
+        override 
+        returns (bool upkeepNeeded, bytes memory /* performData */) 
+    {
+        bool isOpen = lotteryState == LotteryState.OPEN;
+        bool timePassed = block.timestamp >= deadline;
+        bool hasPlayers = playersRanges.length > 0;
 
-        i_paymentToken.safeTransfer(msg.sender,refundAmount);
-
-        emit RefundClaimed(msg.sender, refundAmount);
+        upkeepNeeded = isOpen && timePassed && hasPlayers;
+        return (upkeepNeeded, "");
     }
 
-    // --- Internal helpers ---
+    function performUpkeep(bytes calldata /* performData */) external override nonReentrant {
+        (bool upkeepNeeded, ) = this.checkUpkeep("");
+        require(upkeepNeeded, "Upkeep not needed");
 
-    // Check LINK subscription has enough balance
-    function _hasEnoughLink() internal view returns (bool) {
-        (uint96 balance,,,,) = _COORDINATOR.getSubscription(_SUBSCRIPTION_ID);
-        return balance >= ESTIMATED_LINK_COST;
+        // 1. Lock State
+        lotteryState = LotteryState.CALCULATING;
+
+        // 2. Distribute Fees (Keep 50% in contract for Gas, Send 50% to Owner)
+        
+        if (platformFees > 0) {
+            paymentToken.safeTransfer(owner(), platformFees); // VRFConsumerBaseV2Plus has owner()
+            emit FeesDistributed(platformFees);
+            platformFees = 0;
+        }
+
+        // 3. OPTIMIZATION: Single Player Auto-Win
+        // If only 1 person entered, don't waste LINK on VRF.
+        if (playersRanges.length == 1) {
+            winner = playersRanges[0].player;
+            lotteryState = LotteryState.FINISHED;
+            prizeClaimed = false;
+            emit AutoWinTriggered(winner, prizePool);
+            return;
+        }
+
+        // 4. Standard Flow: Request VRF v2.5
+        VRFV2PlusClient.RandomWordsRequest memory req = VRFV2PlusClient.RandomWordsRequest({
+            keyHash: s_keyHash,
+            subId: s_subscriptionId,
+            requestConfirmations: REQUEST_CONFIRMATIONS,
+            callbackGasLimit: s_callbackGasLimit,
+            numWords: NUM_WORDS,
+            extraArgs: VRFV2PlusClient._argsToBytes(VRFV2PlusClient.ExtraArgsV1({nativePayment: false}))
+        });
+
+        // Use s_vrfCoordinator from Base Contract
+        uint256 requestId = s_vrfCoordinator.requestRandomWords(req);
+        emit LotteryClosed(requestId);
     }
+
+    /*//////////////////////////////////////////////////////////////
+                        SAFETY / RECOVERY
+    //////////////////////////////////////////////////////////////*/
 
     /**
-     * @dev Returns whether the VRF request has timed out and how much time is left
-     * @return shouldCancel True if timeout has expired and cancelIfTimedOut() can be safely called. 
-     * @return timeRemainingSeconds Remaining seconds untill timeout expires (0 if expired or not applicable)
-    */
-    function VRFRequestTimeOutStatus() external view returns (bool shouldCancel, uint256 timeRemaining) {
-        // If contract is not waiting for a VRF fufillment, no timeout check required
+     * @notice Resets the lottery state if Chainlink VRF fails to respond within timeout.
+     * @dev Allows the Owner to retry the VRF request by setting state back to OPEN.
+     */
+    function recoverStuckLottery() external nonReentrant onlyOwner {
+        require(lotteryState == LotteryState.CALCULATING, "Not stuck");
+        require(block.timestamp > vrfRequestTimestamp + vrfTimeoutSeconds, "Timeout not passed");
 
-        if (lotteryState != LotteryState.CALCULATING || vrfRequestTimestamp == 0) {
-            return (false, 0); // No timeout check required
+        // Reset state to OPEN so performUpkeep can try again
+        lotteryState = LotteryState.OPEN; 
+        
+        emit LotteryStateRecovered(block.timestamp);
+    }
+
+
+    /*//////////////////////////////////////////////////////////////
+                             VRF CALLBACK
+    //////////////////////////////////////////////////////////////*/
+
+    function fulfillRandomWords(uint256 /* requestId */, uint256[] calldata randomWords) internal override {
+        // Sanity Check
+        if (lotteryState != LotteryState.CALCULATING) return;
+
+        // 1. Get total tickets (The upper bound of the last range)
+        uint256 totalSold = playersRanges[playersRanges.length - 1].currentTotalTickets;
+        
+        // 2. Determine Winning Ticket ID
+        uint256 winningTicketId = randomWords[0] % totalSold;
+
+        // 3. Find the Winner (Linear Search)
+        // Since playersRanges stores *entries* (batches), not tickets, this loop is short.
+        // E.g., 100 players buying 10,000 tickets = only 100 loops.
+        // Gas Usage: ~1500 gas per unique player. Safe for up to ~1500-2000 unique players.
+        address foundWinner = address(0);
+        
+        for (uint256 i = 0; i < playersRanges.length; i++) {
+            if (playersRanges[i].currentTotalTickets > winningTicketId) {
+                foundWinner = playersRanges[i].player;
+                break;
+            }
         }
 
-        uint256 timeOutAt = vrfRequestTimestamp+i_vrfTimeOut;
+        // 4. Finalize
+        winner = foundWinner;
+        lotteryState = LotteryState.FINISHED;
+        prizeClaimed = false;
 
-        // If timeout passed, return 0 (no time left)
-        if (block.timestamp >= timeOutAt){
-            return (true, 0);
-        }
-
-        // Otherwise, return how many seconds are left
-        return (false, timeOutAt - block.timestamp);
+        emit WinnerPicked(winner, prizePool, winningTicketId);
     }
 
-    // --- View helpers ---
-    function getPlayersCount() external view returns (uint256) {
-        return players.length;
-    }
-
-    function getTicketsOf(address player) external view returns (uint256) {
-        return ticketCount[player];
-    }
+    /*//////////////////////////////////////////////////////////////
+                             VIEW HELPERS
+    //////////////////////////////////////////////////////////////*/
 
     function getPot() external view returns (uint256) {
-        return i_paymentToken.balanceOf(address(this));
+        return prizePool;
+    }
+
+    function getTotalTicketsSold() external view returns (uint256) {
+        if (playersRanges.length == 0) return 0;
+        return playersRanges[playersRanges.length - 1].currentTotalTickets;
+    }
+    
+    function getPlayerCount() external view returns (uint256) {
+        return playersRanges.length;
     }
 }

@@ -3,16 +3,18 @@ pragma solidity ^0.8.20;
 
 import {Lottery} from "./Lotto.sol";
 import {IERC20} from "openzeppelin-contracts/contracts/interfaces/IERC20.sol";
-import {IVRFCoordinatorV2Plus} from "@chainlink/contracts/src/v0.8/vrf/dev/interfaces/IVRFCoordinatorV2Plus.sol";
-import {IVRFSubscriptionV2Plus} from "@chainlink/contracts/src/v0.8/vrf/dev/interfaces/IVRFCoordinatorV2Plus.sol";
+import {IVRFCoordinatorV2Plus} from "@chainlink/vrf/dev/interfaces/IVRFCoordinatorV2Plus.sol";
+import {IVRFSubscriptionV2Plus} from "@chainlink/vrf/dev/interfaces/IVRFCoordinatorV2Plus.sol";
 
 contract LotteryFactory {
     address[] public allLotteries;
-    uint256 public vrfSubscriptionId; // Chainlink VRF subscription ID (shared across all lotteries)
+
+    uint256 public immutable vrfSubscriptionId; // Chainlink VRF subscription ID (shared across all lotteries)
+    address public immutable linkToken;
+    bytes32 public immutable vrfKeyHash;
+    IVRFCoordinatorV2Plus public immutable vrfCoordinator;
+
     address public owner;
-    address private linkToken;
-    bytes32 private vrfKeyHash;
-    IVRFCoordinatorV2Plus public vrfCoordinator;
 
     event LotteryCreated(address indexed lotteryAddress, address indexed creator, uint256 minFee);
 
@@ -46,27 +48,24 @@ contract LotteryFactory {
         uint256 maxPlayers,
         uint256 lotteryDurationSeconds,
         uint32 _callbackGasLimit,
-        uint16 _requestConfirmations,
-        uint32 _numWords,
         uint256 _vrfRequestTimeoutSeconds
-    ) external onlyOwner {
+    ) external onlyOwner  returns (address lotteryAddress) {
 
         // Deply new Lottery contract
         Lottery newLottery = new Lottery(
+            owner,
             address(vrfCoordinator),
+            vrfSubscriptionId,
+            vrfKeyHash,
+            _callbackGasLimit,
             _paymentTokenAddress,
             _ticketPrice,
             maxPlayers,
             lotteryDurationSeconds,
-            vrfSubscriptionId,
-            _callbackGasLimit,
-            _requestConfirmations,
-            _numWords,
-            _vrfRequestTimeoutSeconds,
-            linkToken,
-            vrfKeyHash
+            _vrfRequestTimeoutSeconds
         );
 
+        lotteryAddress = address(newLottery);
         // Add the lottery to the Factory's tracking array
         allLotteries.push(address(newLottery));
 
@@ -74,6 +73,7 @@ contract LotteryFactory {
         vrfCoordinator.addConsumer(vrfSubscriptionId, address(newLottery));
 
         emit LotteryCreated(address(newLottery), msg.sender, _ticketPrice);
+        return lotteryAddress;
     }
 
     function getAllLotteries() external view returns (address[] memory) {

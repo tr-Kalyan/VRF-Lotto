@@ -2,95 +2,101 @@
 pragma solidity ^0.8.20;
 
 import {Lottery} from "./Lotto.sol";
-import {IERC20} from "openzeppelin-contracts/contracts/interfaces/IERC20.sol";
+import {LinkTokenInterface} from "@chainlink/shared/interfaces/LinkTokenInterface.sol";
 import {IVRFCoordinatorV2Plus} from "@chainlink/vrf/dev/interfaces/IVRFCoordinatorV2Plus.sol";
-import {IVRFSubscriptionV2Plus} from "@chainlink/vrf/dev/interfaces/IVRFCoordinatorV2Plus.sol";
 
+/// @title Lottery Factory with Chainlink VRF v2.5 Subscription Ownership
+/// @author Security Researcher
+/// @notice Factory owns a single VRF subscription and deploys unlimited weighted lotteries
+/// @dev Factory creates subscription on deployment — becomes permanent owner
 contract LotteryFactory {
     address[] public allLotteries;
 
-    uint256 public immutable vrfSubscriptionId; // Chainlink VRF subscription ID (shared across all lotteries)
+    uint256 public immutable vrfSubscriptionId;
     address public immutable linkToken;
     bytes32 public immutable vrfKeyHash;
     IVRFCoordinatorV2Plus public immutable vrfCoordinator;
 
     address public owner;
 
-    event LotteryCreated(address indexed lotteryAddress, address indexed creator, uint256 minFee);
+    event LotteryCreated(address indexed lottery, address indexed creator, uint256 ticketPrice);
+    event FactoryDeployed(uint256 subscriptionId);
 
     modifier onlyOwner() {
         require(msg.sender == owner, "Not owner");
         _;
     }
 
-    /** 
-     * @notice Deploys and configures the Lottery Factory with Chainlink VRF details.
-     * @param _subscriptionId The VRF Subscription ID, funded with LINK.
-     * @param _vrfCoordinator The address of the IVRFCoordinatorV2Plus contract.
-     * @param _linkToken The address of the LINK ERC-20 token contract.
-     * @param _keyHash The key hash used for requesting randomness.
-    */
-    constructor(uint256 _subscriptionId, address _vrfCoordinator, address _linkToken, bytes32 _keyHash) {
-        vrfSubscriptionId = _subscriptionId;
+    /// @notice Deploys factory and creates VRF subscription owned by the factory
+    constructor(
+        address _vrfCoordinator,
+        address _linkToken,
+        bytes32 _keyHash
+    ) {
+        owner = msg.sender;
         vrfCoordinator = IVRFCoordinatorV2Plus(_vrfCoordinator);
         linkToken = _linkToken;
         vrfKeyHash = _keyHash;
-        owner = msg.sender;
+
+        // Factory creates and owns the subscription forever
+        vrfSubscriptionId = vrfCoordinator.createSubscription();
+        vrfCoordinator.addConsumer(vrfSubscriptionId, address(this));
+
+        emit FactoryDeployed(vrfSubscriptionId);
     }
 
-    /**
-     * @notice Creates a new Lottery contract, tracks it, and authorizes it as a VRF consumer.
-     * @dev Only callable by the owner. Deploys and authorizes atomically.
-     */
+    /// @notice Creates a new lottery — only owner can call
     function createLottery(
         uint256 _ticketPrice,
         address _paymentTokenAddress,
-        uint256 maxPlayers,
-        uint256 lotteryDurationSeconds,
+        uint256 _maxPlayers,
+        uint256 _lotteryDurationSeconds,
         uint32 _callbackGasLimit,
         uint256 _vrfRequestTimeoutSeconds
-    ) external onlyOwner  returns (address lotteryAddress) {
-
-        // Deply new Lottery contract
+    ) external onlyOwner returns (address lotteryAddress) {
         Lottery newLottery = new Lottery(
-            owner,
+            owner, // ← You get all fees
             address(vrfCoordinator),
             vrfSubscriptionId,
             vrfKeyHash,
             _callbackGasLimit,
             _paymentTokenAddress,
             _ticketPrice,
-            maxPlayers,
-            lotteryDurationSeconds,
+            _maxPlayers,
+            _lotteryDurationSeconds,
             _vrfRequestTimeoutSeconds
         );
 
         lotteryAddress = address(newLottery);
-        // Add the lottery to the Factory's tracking array
-        allLotteries.push(address(newLottery));
+        allLotteries.push(lotteryAddress);
 
-        // Add newly deployed lottery address as consumer in chainlink
-        vrfCoordinator.addConsumer(vrfSubscriptionId, address(newLottery));
+        // Factory (subscription owner) adds lottery as consumer
+        vrfCoordinator.addConsumer(vrfSubscriptionId, lotteryAddress);
 
-        emit LotteryCreated(address(newLottery), msg.sender, _ticketPrice);
+        emit LotteryCreated(lotteryAddress, msg.sender, _ticketPrice);
         return lotteryAddress;
+    }
+
+    /// @notice Fund the factory-owned subscription with LINK
+    /// @param amount Amount of LINK to add (in wei)
+    function fundSubscription(uint256 amount) external {
+        // 1. Pull LINK from caller → factory
+        LinkTokenInterface(linkToken).transferFrom(msg.sender, address(this), amount);
+
+        // 2. Then use factory's LINK to fund subscription
+        LinkTokenInterface(linkToken).transferAndCall(
+            address(vrfCoordinator),
+            amount,
+            abi.encode(vrfSubscriptionId)
+        );
+    }
+
+    /// @notice Emergency: Cancel subscription and return remaining LINK
+    function cancelSubscription() external onlyOwner {
+        vrfCoordinator.cancelSubscription(vrfSubscriptionId, owner);
     }
 
     function getAllLotteries() external view returns (address[] memory) {
         return allLotteries;
-    }
-
-    /**
-     * @notice Returns the standard ERC-20 LINK balance of any address provided.
-     * @dev This checks the balance of a normal account (wallet, contract, etc.) for the LINK token specified in the constructor.
-    */
-    function getLinkBalanceOfVRF(address account) external view returns (uint256) {
-        return IERC20(linkToken).balanceOf(account);
-    }
-
-    
-    // Checks the balance held by the Chainlink VRF Coordinator specifically for this subscription ID.
-    function getLinkBalanceOfSubscription() external view returns (uint96 balance) {    
-        (balance,,,,) = vrfCoordinator.getSubscription(vrfSubscriptionId);
     }
 }

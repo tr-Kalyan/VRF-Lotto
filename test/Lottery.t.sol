@@ -13,7 +13,7 @@ contract LotteryTest is Test {
     LotteryFactory public factory;
     Lottery public lottery;
     VRFCoordinatorV2_5Mock public vrfMock;
-    LinkToken public linkToken;
+    MockLinkToken public linkToken;
     MockUSDC public usdc;
 
     address public owner = makeAddr("owner");
@@ -31,7 +31,7 @@ contract LotteryTest is Test {
 
     function setUp() public {
         // 1. Deploy LINK token
-        linkToken = new LinkToken();
+        linkToken = new MockLinkToken();
 
         // 2. Deploy VRF Mock
         vrfMock = new VRFCoordinatorV2_5Mock(
@@ -47,7 +47,6 @@ contract LotteryTest is Test {
         // 4. Deploy Factory
         vm.startPrank(owner);
         factory = new LotteryFactory(
-            subId,
             address(vrfMock),
             address(linkToken),
             0x787d74caea10b2b357790d5b5247c2f63d1d91572a9846f780606e4d953677ae

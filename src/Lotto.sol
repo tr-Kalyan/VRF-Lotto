@@ -8,6 +8,7 @@ import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 
+
 /// @title Gas-Optimized Weighted Lottery with Chainlink VRF v2.5 & Automation
 /// @author Security Researcher
 /// @notice Fully autonomous lottery using cumulative sum pattern for O(1) entry and weighted randomness
@@ -26,11 +27,15 @@ contract Lottery is VRFConsumerBaseV2Plus, AutomationCompatibleInterface, Reentr
     uint256 public immutable ticketPrice;
     uint256 public immutable duration;
     uint256 public immutable maxTickets;
+    address public immutable feeRecipient;
 
     // VRF configuration (required by base contract)
     uint256 public s_subscriptionId;
     bytes32 public s_keyHash;
     uint32 public s_callbackGasLimit;
+    uint16 private constant REQUEST_CONFIRMATIONS = 3;
+    uint32 private constant NUM_WORDS = 1;
+
 
     // Safety timeout
     uint256 public immutable vrfTimeoutSeconds;
@@ -57,11 +62,11 @@ contract Lottery is VRFConsumerBaseV2Plus, AutomationCompatibleInterface, Reentr
                                    EVENTS
     //////////////////////////////////////////////////////////////*/
 
-    event Entered(address indexed player, uint256 tickets, uint256 rangeEnd);
+    event Entered(address indexed player, uint256 tickets, uint256 rangeStart, uint256 rangeEnd);
     event WinnerPicked(address indexed winner, uint256 prizeAmount, uint256 winningTicketId);
     event AutoWinTriggered(address indexed winner, uint256 prizeAmount);
     event FeesDistributed(uint256 amount);
-    event LotteryClosed(uint256 requestId);
+    event LotteryClosed(uint256 indexed requestId);
     event LotteryStateRecovered(uint256 timestamp);
 
     /*//////////////////////////////////////////////////////////////
@@ -82,7 +87,8 @@ contract Lottery is VRFConsumerBaseV2Plus, AutomationCompatibleInterface, Reentr
         uint256 _duration,
         uint256 _vrfTimeoutSeconds
     ) VRFConsumerBaseV2Plus(_vrfCoordinator) {
-        transferOwnership(_admin);
+        
+        feeRecipient = _admin;
 
         // VRF parameters required by base contract
         s_subscriptionId = _subscriptionId;
@@ -104,13 +110,13 @@ contract Lottery is VRFConsumerBaseV2Plus, AutomationCompatibleInterface, Reentr
     //////////////////////////////////////////////////////////////*/
 
     /// @notice Purchase tickets — O(1) gas cost using cumulative sum pattern
-    /// @param _ticketAmount Number of tickets to buy
-    function enter(uint256 _ticketAmount) external nonReentrant {
+    /// @param _ticketCount Number of tickets to buy
+    function enter(uint256 _ticketCount) external nonReentrant {
         require(lotteryState == LotteryState.OPEN, "Lottery not open");
         require(block.timestamp < deadline, "Lottery ended");
-        require(_ticketAmount > 0, "Zero tickets");
+        require(_ticketCount > 0, "Zero tickets");
 
-        uint256 cost = _ticketAmount * ticketPrice;
+        uint256 cost = _ticketCount * ticketPrice;
         uint256 fee = cost / 100; // 1% platform fee
         uint256 totalTransfer = cost + fee;
 
@@ -118,10 +124,8 @@ contract Lottery is VRFConsumerBaseV2Plus, AutomationCompatibleInterface, Reentr
             ? 0 
             : playersRanges[playersRanges.length - 1].currentTotalTickets;
         
-        uint256 newTotal = currentTotal + _ticketAmount;
+        uint256 newTotal = currentTotal + _ticketCount;
         require(newTotal <= maxTickets, "Max tickets exceeded");
-
-        paymentToken.safeTransferFrom(msg.sender, address(this), totalTransfer);
 
         prizePool += cost;
         platformFees += fee;
@@ -129,9 +133,14 @@ contract Lottery is VRFConsumerBaseV2Plus, AutomationCompatibleInterface, Reentr
         playersRanges.push(TicketRange({
             player: msg.sender,
             currentTotalTickets: newTotal
-        }));
+        }));    
 
-        emit Entered(msg.sender, _ticketAmount, newTotal);
+
+        paymentToken.safeTransferFrom(msg.sender, address(this), totalTransfer);
+
+        
+
+        emit Entered(msg.sender, _ticketCount, currentTotal, newTotal - 1);
     }
 
     /// @notice Winner claims prize after draw completes
@@ -159,7 +168,7 @@ contract Lottery is VRFConsumerBaseV2Plus, AutomationCompatibleInterface, Reentr
         returns (bool upkeepNeeded, bytes memory) 
     {
         bool isOpen = lotteryState == LotteryState.OPEN;
-        bool timePassed = block.timestamp >= deadline;
+        bool timePassed = block.timestamp > deadline;
         bool hasPlayers = playersRanges.length > 0;
 
         upkeepNeeded = isOpen && timePassed && hasPlayers;
@@ -175,7 +184,7 @@ contract Lottery is VRFConsumerBaseV2Plus, AutomationCompatibleInterface, Reentr
 
         // Distribute all platform fees to owner
         if (platformFees > 0) {
-            paymentToken.safeTransfer(owner(), platformFees);
+            paymentToken.safeTransfer(feeRecipient, platformFees);
             emit FeesDistributed(platformFees);
             platformFees = 0;
         }

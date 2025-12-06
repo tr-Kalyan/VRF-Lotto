@@ -4,12 +4,13 @@ pragma solidity ^0.8.20;
 import {Lottery} from "./Lotto.sol";
 import {LinkTokenInterface} from "@chainlink/shared/interfaces/LinkTokenInterface.sol";
 import {IVRFCoordinatorV2Plus} from "@chainlink/vrf/dev/interfaces/IVRFCoordinatorV2Plus.sol";
+import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
 
 /// @title Lottery Factory with Chainlink VRF v2.5 Subscription Ownership
 /// @author Security Researcher
 /// @notice Factory owns a single VRF subscription and deploys unlimited weighted lotteries
 /// @dev Factory creates subscription on deployment — becomes permanent owner
-contract LotteryFactory {
+contract LotteryFactory is Ownable {
     address[] public allLotteries;
 
     uint256 public immutable vrfSubscriptionId;
@@ -17,30 +18,24 @@ contract LotteryFactory {
     bytes32 public immutable vrfKeyHash;
     IVRFCoordinatorV2Plus public immutable vrfCoordinator;
 
-    address public owner;
+
 
     event LotteryCreated(address indexed lottery, address indexed creator, uint256 ticketPrice);
     event FactoryDeployed(uint256 subscriptionId);
 
-    modifier onlyOwner() {
-        require(msg.sender == owner, "Not owner");
-        _;
-    }
 
     /// @notice Deploys factory and creates VRF subscription owned by the factory
     constructor(
         address _vrfCoordinator,
         address _linkToken,
         bytes32 _keyHash
-    ) {
-        owner = msg.sender;
+    ) Ownable(msg.sender) {
         vrfCoordinator = IVRFCoordinatorV2Plus(_vrfCoordinator);
         linkToken = _linkToken;
         vrfKeyHash = _keyHash;
 
         // Factory creates and owns the subscription forever
         vrfSubscriptionId = vrfCoordinator.createSubscription();
-        vrfCoordinator.addConsumer(vrfSubscriptionId, address(this));
 
         emit FactoryDeployed(vrfSubscriptionId);
     }
@@ -55,7 +50,7 @@ contract LotteryFactory {
         uint256 _vrfRequestTimeoutSeconds
     ) external onlyOwner returns (address lotteryAddress) {
         Lottery newLottery = new Lottery(
-            owner, // ← You get all fees
+            owner(), // Deployer of LotteryFactory
             address(vrfCoordinator),
             vrfSubscriptionId,
             vrfKeyHash,
@@ -69,6 +64,10 @@ contract LotteryFactory {
 
         lotteryAddress = address(newLottery);
         allLotteries.push(lotteryAddress);
+
+        // Auto-accept ownership of lottery on behalf of caller
+        // newLottery.acceptOwnership();
+
 
         // Factory (subscription owner) adds lottery as consumer
         vrfCoordinator.addConsumer(vrfSubscriptionId, lotteryAddress);
@@ -93,7 +92,7 @@ contract LotteryFactory {
 
     /// @notice Emergency: Cancel subscription and return remaining LINK
     function cancelSubscription() external onlyOwner {
-        vrfCoordinator.cancelSubscription(vrfSubscriptionId, owner);
+        vrfCoordinator.cancelSubscription(vrfSubscriptionId, owner());
     }
 
     function getAllLotteries() external view returns (address[] memory) {

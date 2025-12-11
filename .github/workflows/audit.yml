@@ -1,0 +1,33 @@
+name: Security & Testing
+
+on: [push, pull_request]
+
+jobs:
+  check:
+    name: Run Foundry Tests, Coverage, Snapshot & Slither
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install Foundry
+        uses: foundry-rs/foundry-toolchain@v1
+
+      - name: Run Tests
+        run: forge test -vv
+
+      # Strict Check: Fails if gas usage increases significantly
+      - name: Check Gas Usage
+        run: forge snapshot --check
+
+      - name: Run Coverage
+        run: forge coverage
+
+      - name: Run Slither Analysis
+        uses: crytic/slither-action@v0.4.0
+        id: slither
+        with:
+          fail-on: none
+          slither-args: --checklist
+          ignore-compile: true

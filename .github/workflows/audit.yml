@@ -33,5 +33,5 @@ jobs:
         id: slither
         with:
           fail-on: none
-          slither-args: --checklist
+          slither-args: --checklist --foundry
           ignore-compile: true

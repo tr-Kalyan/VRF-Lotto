@@ -1,170 +1,130 @@
 ---
 
-# 🏆 Decentralized Weighted Lottery (VRF v2.5)
+# 🏆 Autonomous Weighted Lottery — Chainlink VRF v2.5
 
-![Solidity](https://img.shields.io/badge/Solidity-0.8.x-2c2c2c?style=for-the-badge&logo=solidity)
-![Foundry](https://img.shields.io/badge/Built%20With-Foundry-ff69b4?style=for-the-badge&logo=ethereum)
-![Chainlink VRF](https://img.shields.io/badge/Chainlink-VRF%20v2.5-blue?style=for-the-badge&logo=chainlink)
-![Security-Focused](https://img.shields.io/badge/Security--Focused-brightgreen?style=for-the-badge)
-![License](https://img.shields.io/badge/License-MIT-yellow?style=for-the-badge)
+![Solidity](https://img.shields.io/badge/Solidity-0.8.20-black?style=for-the-badge&logo=solidity)
+![Foundry](https://img.shields.io/badge/Built%20with-Foundry-ff69b4?style=for-the-badge&logo=ethereum)
+![Chainlink](https://img.shields.io/badge/Chainlink-VRF%20v2.5%20%2B%20Automation-blue?style=for-the-badge&logo=chainlink)
+![Sepolia](https://img.shields.io/badge/Network-Sepolia-brightgreen?style=for-the-badge)
+![Verified](https://img.shields.io/badge/Etherscan-Verified-success?style=for-the-badge)
 
-
-> **A verifiably fair, gas-efficient lottery system built on Ethereum, powered by Chainlink VRF v2.5, and deployed using the Factory pattern.**
-> Fully on-chain, transparent lottery with economic incentives for automation.
-
----
-
-## ⚙️ Tech Stack
-
-| Component       | Technology                       | Purpose                          |
-| --------------- | -------------------------------- | -------------------------------- |
-| Smart Contracts | **Solidity (0.8.x)**             | Core logic and VRF integration   |
-| Framework       | **Foundry (forge, cast)**        | Development, testing, deployment |
-| Randomness      | **Chainlink VRF v2.5**           | Secure and verifiable randomness |
-| Security        | **OpenZeppelin ReentrancyGuard** | Protects against reentrancy      |
-| Architecture    | **Factory Pattern**              | Scalable contract deployment     |
+> **A verifiably fair, gas-optimized lottery powered by Chainlink VRF v2.5 and Automation.**  
+> Factory-owned subscription • Cumulative sum pattern • 1% platform fee (extra paid by player) • Production-grade security
 
 ---
 
-## 🧩 Architecture Overview
+## 🚀 Live on Sepolia
 
-The system is composed of two primary contracts:
-
-* **`LotteryFactory`** – Deploys and manages new `Lottery` instances. Handles subscription setup and ownership transfer for Chainlink VRF.
-* **`Lottery`** – The actual game logic. Manages participants, ticketing, randomness, and payouts.
-
-This separation makes the system modular, scalable, and easy to verify.
+- **Factory**: [`0xBeF17915bBB6fa6956045C7977C17f7fFB86FA49`](https://sepolia.etherscan.io/address/0xBeF17915bBB6fa6956045C7977C17f7fFB86FA49)
+- **Example Lottery**: [`0xBD7Aa8f8DC814d3c2a49E92CE08f8d9FaC2C42ec`](https://sepolia.etherscan.io/address/0xBD7Aa8f8DC814d3c2a49E92CE08f8d9FaC2C42ec)
+- **VRF Subscription**: Factory-owned (created on deployment)
+- **Automation Upkeep**: Manual registration required (once per lottery)
 
 ---
 
-### ⚙️ LINK Subscription Assumption
+## ⚙️ Architecture Overview
 
-* For simplicity, the current version assumes the **Chainlink VRF subscription** is pre-funded with sufficient LINK.  
-* In production, an **automated top-up mechanism** or **dynamic LINK reserve system** would be added.  
 
-* The focus of this project is on **contract integrity, fairness, and DeFi-grade reward flow design**, not off-chain funding logistics.
+### How It Works — Step by Step
 
----
+1. **You (EOA)**  
+   The deployer and sole owner of the `LotteryFactory`. Only you can call `createLottery()` and management functions (`fundSubscription`, `removeConsumer`, etc.).
 
-## 🔬 Key Design Choices
+2. **Factory**  
+   - On deployment, automatically creates a Chainlink VRF v2.5 subscription and becomes its permanent owner.  
+   - No manual subscription creation or ownership transfer required.  
+   - Deploys new `Lottery` instances on demand.  
+   - Adds each new lottery as a consumer to the shared subscription.  
+   - Distributes all collected platform fees to its owner (you).
 
-### 🎲 1. Weighted Random Selection (Gas Efficient)
+3. **Lottery Instances**  
+   - Each lottery runs independently with its own ticket sales, deadline, and prize pool.  
+   - After the deadline, Chainlink Automation calls `performUpkeep()` (requires manual upkeep registration once per lottery).  
+   - `performUpkeep()` sends platform fees to you and requests randomness from Chainlink VRF.  
+   - VRF callback selects the winner using the cumulative sum pattern.  
+   - Winner claims the full prize pool; you keep the extra 1% platform fee paid by players.
 
-Instead of storing each ticket separately (`O(tickets)`), the system stores **unique players only** and tracks their **ticket counts**.
+**Result**: A scalable, autonomous lottery system where you maintain full control and collect all fees, while players enjoy verifiably fair randomness powered by Chainlink.
 
-The winner is computed in `O(unique players)` time using a single random value from VRF.
 
-✅ Cheap entries
-✅ Predictable gas usage
-✅ Fully fair randomness
-
----
-
-### 💰 2. Isolated Prize & Fee Pools
-
-| Pool           | Purpose                                         |
-| -------------- | ----------------------------------------------- |
-| `prizePool`    | 100% of ticket value — winner’s reward          |
-| `platformFees` | Operational costs (automation & gas incentives) |
-
-By separating pools, the **prize money remains untouched** and auditable.
+**Key Innovation**: Factory creates and owns the VRF subscription on deployment — no manual ownership transfer required.
 
 ---
 
-### 🧱 3. Safe Payouts via Pull Pattern
+## 🔬 Core Design Decisions
 
-All external transfers follow the **Checks-Effects-Interactions (CEI)** model:
+### Weighted Randomness — Cumulative Sum Pattern
 
-* Balances are updated before transfers
-* Payouts are explicitly claimed (pull-based)
-* Protected by `ReentrancyGuard`
+Players are stored with cumulative ticket counts instead of individual tickets.
 
-This guarantees safety against reentrancy or state manipulation.
+Example:
+| Player | Tickets | Cumulative Total | Ticket Range |
+|--------|---------|------------------|--------------|
+| P1     | 5       | 5                | 0–4          |
+| P2     | 3       | 8                | 5–7          |
+| P3     | 2       | 10               | 8–9          |
 
----
+Winner selection:
+1. VRF provides random number
+2. `winningTicketId = random % totalSold`
+3. Linear search finds the player whose range contains the ID
 
-## 🔐 Security Model
+**Benefits**:
+- Entry cost: O(1)
+- Winner search: O(unique players) — cheap in practice
+- Gas predictable
 
-| Threat                  | Mitigation                             |
-| ----------------------- | -------------------------------------- |
-| Randomness manipulation | Chainlink VRF proofs                   |
-| Reentrancy              | CEI pattern + OpenZeppelin guard       |
-| Gas griefing            | Fixed callback gas limit               |
-| Prize pool theft        | Isolated pools & non-upgradable design |
-| Centralization risk     | Factory-driven deployments             |
+### Economic Model
 
----
+- **Ticket Price**: Configurable (e.g., 1 USDC)
+- **Player Pays**: `ticketPrice + 1% fee` (e.g., 1.01 USDC per ticket)
+- **Prize Pool**: 100% of base ticket price
+- **Platform Fee**: 1% of base ticket price (extra paid by player)
+- **Owner Profit**: 100% of platform fees
 
-## 🚀 Deployment (Sepolia Example)
+**Design Rationale**:
+- Prize pool remains untouched — maximum fairness for players
+- Owner earns pure profit from the fee
+- Transparent and predictable accounting
 
-1. **Deploy the Factory**
+### Autonomy
 
-   ```solidity
-   factory = new LotteryFactory(subId, vrfCoordinator, linkToken, keyHash);
-   ```
+- Chainlink Automation calls `performUpkeep()` after deadline
+- Triggers VRF request
+- VRF callback selects winner
+- Single-player lotteries auto-win (saves LINK)
 
-2. **Create and Fund a VRF Subscription**
-
-   ```solidity
-   subId = coord.createSubscription();
-   coord.fundSubscription(subId, 100 ether);
-   ```
-
-3. **Authorize Factory**
-
-   ```solidity
-   coord.requestSubscriptionOwnerTransfer(subId, address(factory));
-   factory.acceptSubscriptionOwnerTransfer(subId);
-   ```
-
-4. **Deploy a Lottery Instance**
-
-   ```solidity
-   factory.createLottery(ticketPrice, duration, maxPlayers);
-   ```
+**Limitation**: Each lottery requires manual upkeep registration on Chainlink Automation UI.
 
 ---
 
-## 🧠 Lifecycle Overview
+## 🔐 Security & Analysis
 
-| Stage          | Function                         | Triggered By | Description               |
-| -------------- | -------------------------------- | ------------ | ------------------------- |
-| 🎟 Enter       | `enter()`                        | Player       | Buy tickets               |
-| 🔒 Close       | `closeAndRequestWinner()`        | Any user     | Ends entry & requests VRF |
-| 🎲 Fulfill     | `fulfillRandomWords()`           | Chainlink    | VRF callback (automated)  |
-| 🏁 Finalize    | `finalizeWithStoredRandomness()` | Any user     | Computes winner           |
-| 💰 Claim Prize | `claimPrize()`                   | Winner       | Withdraw jackpot          |
-| ⚡ Claim Reward | `withdrawTriggerReward()`        | Caller       | Get trigger fee reward    |
+**Static Analysis (Slither)**:
+- Ran Slither on all contracts
+- 4 findings — all informational/false positives
+- Primary false positive: unchecked LINK token transfers
+- **Risk Accepted**: LINK token reverts on failure — no silent failures possible
+- No high or critical vulnerabilities
+
+**Key Mitigations**:
+- ReentrancyGuard + Checks-Effects-Interactions pattern
+- Timestamp dependence mitigated via trusted Chainlink Automation
+- Prize pool isolated from fees
+- Factory ownership (centralized control — intended design)
 
 ---
 
 ## 🧪 Testing
 
-Test suite written in **Foundry** covering:
-
-* ✅ Full lifecycle simulation (entry → draw → finalize → payout)
-* ⚠️ Guard and revert conditions
-* 💸 Fee accounting and prize pool integrity
-* 🔍 Randomness verification
+- Comprehensive Foundry unit tests
+- Full lifecycle coverage: entry → deadline → upkeep → VRF → claim
+- Edge cases tested (single player, revert conditions, deadline handling)
+- Manual end-to-end verification on Sepolia
 
 ```bash
-forge install
-forge test --via-ir --optimize
+forge test -vvv
 ```
-
----
-
-## ✅ Security-Focused
-
-This project follows **best practices** from CodeHawks and Chainlink’s VRF guidelines:
-
-* Modular and dependency-isolated design
-* No unbounded loops or external dependencies during VRF usage
-* Strict CEI pattern and minimal state mutation
-* Clearly separated user funds and protocol fees
-
-
----
 
 ## 👨‍💻 Author
 
@@ -174,7 +134,7 @@ This project follows **best practices** from CodeHawks and Chainlink’s VRF gui
 Active on CodeHawks & Code4rena
 
 
-[![GitHub](https://img.shields.io/badge/GitHub-tr--Kalyan-black?style=for-the-badge\&logo=github)](https://github.com/tr-Kalyan)
+[![GitHub](https://img.shields.io/badge/GitHub-tr--Kalyan-black?style=for-the-badge&logo=github)](https://github.com/tr-Kalyan)
 
 ---
 

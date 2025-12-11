@@ -29,5 +29,5 @@ jobs:
         uses: crytic/slither-action@v0.4.0
         with:
           fail-on: none
-          slither-args: --checklist
+          slither-args: --checklist --filter-paths "lib/|test/|script/|mock/"
           ignore-compile: true

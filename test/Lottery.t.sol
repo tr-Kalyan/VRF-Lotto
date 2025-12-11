@@ -9,8 +9,8 @@ import {VRFCoordinatorV2_5Mock} from "@chainlink/vrf/mocks/VRFCoordinatorV2_5Moc
 import {MockLinkToken} from "@chainlink/mocks/MockLinkToken.sol";
 import {MockUSDC} from "./mock/MockUSDC.sol"; 
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
-
-contract LotteryTest is Test {
+import {ILotteryEvents} from "../src/interfaces/ILotteryEvents.sol";
+contract LotteryTest is Test, ILotteryEvents {
     LotteryFactory public factory;
     Lottery public lottery;
     VRFCoordinatorV2_5Mock public vrfMock;
@@ -119,12 +119,14 @@ contract LotteryTest is Test {
         uint256 balanceBefore = usdc.balanceOf(player1);
 
         vm.expectEmit(true, true, false, true);
-        emit Lottery.Entered(
-            player1,
-            tickets,
-            0,      // rangeStart (first entry = 0)
-            9      // rangeEnd (0 + 10)
-        );
+        // emit Lottery.Entered(
+        //     player1,
+        //     tickets,
+        //     0,      // rangeStart (first entry = 0)
+        //     9      // rangeEnd (0 + 10)
+        // );
+
+        emit Entered(player1,tickets,0,9);
 
         vm.prank(player1);
         lottery.enter(tickets);
@@ -499,5 +501,54 @@ contract LotteryTest is Test {
         vm.expectRevert();
         vm.prank(player1);
         factory.createLottery(1e6, address(usdc), 100, 1 hours, 500_000, 1 hours);
+    }
+
+    function test_21_RemoveConsumerFreesSlotAndAllowsNewLottery() public {
+        // === Fill up to 99 lotteries (max consumers) ===
+        // === Mock counts owner(factory) as consumer ===
+        for (uint i = 0; i < 99; i++) {
+            vm.prank(owner);
+            factory.createLottery(
+                TICKET_PRICE,
+                address(usdc),
+                MAX_TICKETS,
+                DURATION,
+                500_000,
+                1 hours
+            );
+        }
+
+        // === Try to create 100th lottery → should REVERT (no consumer slot) ===
+        vm.expectRevert(); // Chainlink: "Too many consumers"
+        vm.prank(owner);
+        factory.createLottery(
+            TICKET_PRICE,
+            address(usdc),
+            MAX_TICKETS,
+            DURATION,
+            500_000,
+            1 hours
+        );
+
+        // === Get the first lottery address ===
+        address[] memory Lotteries = factory.getAllLotteries();
+        address firstLottery = Lotteries[0];
+
+        // === Remove it as consumer ===
+        vm.prank(owner);
+        factory.removeConsumer(firstLottery);
+
+        // === Now create 101th lottery → should PASS ===
+        vm.prank(owner);
+        address newLottery = factory.createLottery(
+            TICKET_PRICE,
+            address(usdc),
+            MAX_TICKETS,
+            DURATION,
+            500_000,
+            1 hours
+        );
+
+        assertTrue(newLottery != address(0), "100th lottery created after removal");
     }
 }

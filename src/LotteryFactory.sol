@@ -65,9 +65,6 @@ contract LotteryFactory is Ownable {
         lotteryAddress = address(newLottery);
         allLotteries.push(lotteryAddress);
 
-        // Auto-accept ownership of lottery on behalf of caller
-        // newLottery.acceptOwnership();
-
 
         // Factory (subscription owner) adds lottery as consumer
         vrfCoordinator.addConsumer(vrfSubscriptionId, lotteryAddress);
@@ -78,7 +75,7 @@ contract LotteryFactory is Ownable {
 
     /// @notice Fund the factory-owned subscription with LINK
     /// @param amount Amount of LINK to add (in wei)
-    function fundSubscription(uint256 amount) external {
+    function fundSubscription(uint256 amount) external onlyOwner{
         // 1. Pull LINK from caller → factory
         LinkTokenInterface(linkToken).transferFrom(msg.sender, address(this), amount);
 
@@ -97,5 +94,11 @@ contract LotteryFactory is Ownable {
 
     function getAllLotteries() external view returns (address[] memory) {
         return allLotteries;
+    }
+
+    /// @notice Remove a lottery from the VRF subscription to free a consumer slot
+    /// @param lotteryAddress Address of the finished lottery
+    function removeConsumer(address lotteryAddress) external onlyOwner {
+        vrfCoordinator.removeConsumer(vrfSubscriptionId, lotteryAddress);
     }
 }

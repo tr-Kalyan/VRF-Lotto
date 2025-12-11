@@ -7,13 +7,13 @@ import {AutomationCompatibleInterface} from "@chainlink/automation/AutomationCom
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
-
+import {ILotteryEvents} from "./interfaces/ILotteryEvents.sol";
 
 /// @title Gas-Optimized Weighted Lottery with Chainlink VRF v2.5 & Automation
 /// @author Security Researcher
 /// @notice Fully autonomous lottery using cumulative sum pattern for O(1) entry and weighted randomness
 /// @dev Factory deploys this contract — subscription owned by factory — all fees go to owner
-contract Lottery is VRFConsumerBaseV2Plus, AutomationCompatibleInterface, ReentrancyGuard {
+contract Lottery is ILotteryEvents, VRFConsumerBaseV2Plus, AutomationCompatibleInterface, ReentrancyGuard {
     using SafeERC20 for IERC20;
 
     /*//////////////////////////////////////////////////////////////
@@ -62,12 +62,7 @@ contract Lottery is VRFConsumerBaseV2Plus, AutomationCompatibleInterface, Reentr
                                    EVENTS
     //////////////////////////////////////////////////////////////*/
 
-    event Entered(address indexed player, uint256 tickets, uint256 rangeStart, uint256 rangeEnd);
-    event WinnerPicked(address indexed winner, uint256 prizeAmount, uint256 winningTicketId);
-    event AutoWinTriggered(address indexed winner, uint256 prizeAmount);
-    event FeesDistributed(uint256 amount);
-    event LotteryClosed(uint256 indexed requestId);
-    event LotteryStateRecovered(uint256 timestamp);
+
 
     /*//////////////////////////////////////////////////////////////
                                   CONSTRUCTOR

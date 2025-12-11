@@ -17,6 +17,10 @@ jobs:
       - name: Run Tests
         run: forge test -vv
 
+      # Clean artifacts to ensure Slither gets a fresh build
+      - name: Clean Artifacts
+        run: forge clean
+
       # Strict Check: Fails if gas usage increases significantly
       - name: Check Gas Usage
         run: forge snapshot --check

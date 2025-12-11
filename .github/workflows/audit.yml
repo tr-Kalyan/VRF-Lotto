@@ -4,7 +4,7 @@ on: [push, pull_request]
 
 jobs:
   check:
-    name: Run Foundry Tests, Coverage, Snapshot & Slither
+    name: Run Foundry Tests, Gas Snapshot & Slither
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -17,21 +17,17 @@ jobs:
       - name: Run Tests
         run: forge test -vv
 
-      # Clean artifacts to ensure Slither gets a fresh build
-      - name: Clean Artifacts
-        run: forge clean
-
-      # Strict Check: Fails if gas usage increases significantly
-      - name: Check Gas Usage
+      - name: Gas Snapshot (detect regressions)
         run: forge snapshot --check
 
-      - name: Run Coverage
-        run: forge coverage
+      - name: Build Contracts for Slither
+        run: |
+          forge clean
+          forge build --build-info
 
       - name: Run Slither Analysis
         uses: crytic/slither-action@v0.4.0
-        id: slither
         with:
           fail-on: none
-          slither-args: --checklist --foundry
+          slither-args: --checklist
           ignore-compile: true

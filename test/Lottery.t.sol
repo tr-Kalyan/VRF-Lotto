@@ -551,4 +551,65 @@ contract LotteryTest is Test, ILotteryEvents {
 
         assertTrue(newLottery != address(0), "100th lottery created after removal");
     }
+
+    function test_GasDoSWith1000Players() public {
+        // Fund 1000 different addresses
+        for (uint i = 0; i < 1005; i++) {
+            address attacker = address(uint160(i + 1000));
+            usdc.mint(attacker, 10e6);
+            
+            vm.startPrank(attacker);
+            usdc.approve(address(lottery), type(uint256).max);
+            lottery.enter(1); // Each buys 1 ticket
+            vm.stopPrank();
+        }
+        
+        console.log("Total players:", lottery.getPlayerCount());
+        console.log("Total tickets sold:", lottery.getTotalTicketsSold());
+        
+        // Warp to deadline
+        vm.warp(block.timestamp + DURATION + 1);
+        
+        // Trigger VRF
+        vm.recordLogs();
+        lottery.performUpkeep("");
+        
+        // Extract requestId from logs (same pattern as test_08)
+        Vm.Log[] memory logs = vm.getRecordedLogs();
+        uint256 requestId;
+        
+        for (uint256 i = 0; i < logs.length; i++) {
+            if (logs[i].topics[0] == keccak256("LotteryClosed(uint256)")) {
+                requestId = uint256(logs[i].topics[1]);
+                break;
+            }
+        }
+        
+        assertGt(requestId, 0, "requestId should be emitted");
+        
+        // Set up random number (winner will be player at index 500)
+        uint256[] memory randomWords = new uint256[](1);
+        randomWords[0] = 500;
+        
+        // THIS IS THE CRITICAL MEASUREMENT:
+        console.log("\n=== GAS MEASUREMENT START ===");
+        console.log("Callback gas limit:", lottery.s_callbackGasLimit());
+        
+        uint256 gasStart = gasleft();
+        
+        // Attempt to fulfill VRF
+        vrfMock.fulfillRandomWords(requestId, address(lottery));
+        
+        uint256 gasUsed = gasStart - gasleft();
+        
+        console.log("Gas used for 1000 players:", gasUsed);
+        console.log("=== GAS MEASUREMENT END ===\n");
+        
+        // Check if winner was selected (if this passes, gas DoS didn't happen)
+        address winner = lottery.winner();
+        console.log("Winner selected:", winner);
+        assertEq(uint256(lottery.lotteryState()), 2, "Should be FINISHED");
+    }
+
+
 }

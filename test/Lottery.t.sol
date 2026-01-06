@@ -7,9 +7,10 @@ import {Lottery} from "../src/Lotto.sol";
 import {LotteryFactory} from "../src/LotteryFactory.sol";
 import {VRFCoordinatorV2_5Mock} from "@chainlink/vrf/mocks/VRFCoordinatorV2_5Mock.sol";
 import {MockLinkToken} from "@chainlink/mocks/MockLinkToken.sol";
-import {MockUSDC} from "./mock/MockUSDC.sol"; 
+import {MockUSDC} from "./mock/MockUSDC.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {ILotteryEvents} from "../src/interfaces/ILotteryEvents.sol";
+
 contract LotteryTest is Test, ILotteryEvents {
     LotteryFactory public factory;
     Lottery public lottery;
@@ -21,14 +22,13 @@ contract LotteryTest is Test, ILotteryEvents {
     address public player1 = makeAddr("player1");
     address public player2 = makeAddr("player2");
     address public player3 = makeAddr("player3");
-    address public automation = makeAddr("automation"); 
+    address public automation = makeAddr("automation");
 
     uint256 public constant TICKET_PRICE = 1e6; // 1 USDC (6 decimals)
     uint256 public constant DURATION = 1 hours;
     uint256 public constant MAX_TICKETS = 1000;
     uint256 public constant VRF_TIMEOUT_SECONDS = 3600;
 
-    
     uint256 public subId;
 
     function setUp() public {
@@ -40,9 +40,7 @@ contract LotteryTest is Test, ILotteryEvents {
         // Factory automatically creates Sub #1 in its constructor
         vm.startPrank(owner);
         factory = new LotteryFactory(
-            address(vrfMock),
-            address(linkToken),
-            0x787d74caea10b2b357790d5b5247c2f63d1d91572a9846f780606e4d953677ae
+            address(vrfMock), address(linkToken), 0x787d74caea10b2b357790d5b5247c2f63d1d91572a9846f780606e4d953677ae
         );
         vm.stopPrank();
 
@@ -62,14 +60,8 @@ contract LotteryTest is Test, ILotteryEvents {
         // 6. Create Lottery (AS OWNER)
         // Factory will automatically add this lottery to the subscription
         vm.startPrank(owner);
-        address lotteryAddr = factory.createLottery(
-            TICKET_PRICE,
-            address(usdc),
-            MAX_TICKETS,
-            DURATION,
-            500_000,
-            1 hours
-        );
+        address lotteryAddr =
+            factory.createLottery(TICKET_PRICE, address(usdc), MAX_TICKETS, DURATION, 500_000, 1 hours);
         lottery = Lottery(lotteryAddr);
         vm.stopPrank();
 
@@ -81,30 +73,31 @@ contract LotteryTest is Test, ILotteryEvents {
         vm.prank(player3);
         usdc.approve(address(lottery), type(uint256).max);
     }
+
     // TESTS START HERE
     function test_01_DeploymentAndConfig() public view {
         assertEq(address(lottery.paymentToken()), address(usdc));
         assertEq(lottery.ticketPrice(), TICKET_PRICE);
         // Verify Factory passed ownership correctly to the Admin (owner)
-        assertEq(lottery.owner(), address(factory)); 
+        assertEq(lottery.owner(), address(factory));
         assertEq(lottery.maxTickets(), MAX_TICKETS);
         assertEq(uint256(lottery.lotteryState()), 0); // OPEN
     }
 
     function test_02_PlayerCanEnterSingleTicket() public {
         uint256 balanceBefore = usdc.balanceOf(player1);
-        
+
         vm.prank(player1);
         lottery.enter(1);
-        
+
         // Check ticket range
         (address p, uint256 total) = lottery.playersRanges(0);
         assertEq(p, player1);
         assertEq(total, 1);
-        
+
         // Check payment (1 USDC + 1% fee = 1.01 USDC)
         assertEq(usdc.balanceOf(player1), balanceBefore - 1.01e6);
-        
+
         // Check prize pool and fees
         assertEq(lottery.prizePool(), TICKET_PRICE);
         assertEq(lottery.platformFees(), TICKET_PRICE / 100);
@@ -126,11 +119,11 @@ contract LotteryTest is Test, ILotteryEvents {
         //     9      // rangeEnd (0 + 10)
         // );
 
-        emit Entered(player1,tickets,0,9);
+        emit Entered(player1, tickets, 0, 9);
 
         vm.prank(player1);
         lottery.enter(tickets);
-        
+
         // CHECK STATE
         (address p, uint256 total) = lottery.playersRanges(0);
         assertEq(p, player1);
@@ -143,71 +136,75 @@ contract LotteryTest is Test, ILotteryEvents {
         assertEq(lottery.prizePool(), cost);
         assertEq(lottery.platformFees(), fee);
     }
+
     function test_04_CumulativeSumPatternWorks() public {
         // Player 1 buys 5 tickets (range: 0-4)
         vm.prank(player1);
         lottery.enter(5);
-        
+
         // Player 2 buys 3 tickets (range: 5-7)
         vm.prank(player2);
         lottery.enter(3);
-        
+
         // Player 3 buys 2 tickets (range: 8-9)
         vm.prank(player3);
         lottery.enter(2);
-        
+
         // Verify cumulative totals
         (, uint256 total1) = lottery.playersRanges(0);
         (, uint256 total2) = lottery.playersRanges(1);
         (, uint256 total3) = lottery.playersRanges(2);
-        
-        assertEq(total1, 5);  // Player 1: tickets 0-4
-        assertEq(total2, 8);  // Player 2: tickets 5-7 (cumulative: 8)
+
+        assertEq(total1, 5); // Player 1: tickets 0-4
+        assertEq(total2, 8); // Player 2: tickets 5-7 (cumulative: 8)
         assertEq(total3, 10); // Player 3: tickets 8-9 (cumulative: 10)
-        
+
         assertEq(lottery.getTotalTicketsSold(), 10);
         assertEq(lottery.getPlayerCount(), 3);
     }
+
     function test_05_SinglePlayerAutoWin() public {
         // Only one player enters
         vm.prank(player1);
         lottery.enter(5);
-        
+
         // Fast forward past deadline
         vm.warp(block.timestamp + DURATION + 1);
-        
+
         // Trigger upkeep (automation calls this)
         lottery.performUpkeep("");
-        
+
         // Should be auto-win (no VRF needed)
         assertEq(lottery.winner(), player1);
         assertEq(uint256(lottery.lotteryState()), 2); // FINISHED
-        
+
         // Winner can claim
         uint256 prize = lottery.prizePool();
         vm.prank(player1);
         lottery.claimPrize();
-        
+
         assertEq(usdc.balanceOf(player1), 1000e6 - 5.05e6 + prize);
         assertTrue(lottery.prizeClaimed());
     }
+
     function test_06_MultiplePlayersEnter() public {
         vm.prank(player1);
         lottery.enter(10);
-        
+
         vm.prank(player2);
         lottery.enter(5);
-        
+
         vm.prank(player3);
         lottery.enter(15);
-        
+
         assertEq(lottery.getTotalTicketsSold(), 30);
         assertEq(lottery.getPlayerCount(), 3);
         assertEq(lottery.prizePool(), 30 * TICKET_PRICE);
     }
+
     function test_07_AutomationTriggersCloseWhenDeadlineReached() public {
         // 1. No players → no upkeep
-        (bool upkeepNeeded, ) = lottery.checkUpkeep("");
+        (bool upkeepNeeded,) = lottery.checkUpkeep("");
         assertFalse(upkeepNeeded, "No players -> no upkeep");
 
         // 2. Multiple players enter
@@ -215,23 +212,23 @@ contract LotteryTest is Test, ILotteryEvents {
         lottery.enter(10); // range 0-9
 
         vm.prank(player2);
-        lottery.enter(5);  // range 10-14
+        lottery.enter(5); // range 10-14
 
         vm.prank(player3);
-        lottery.enter(3);  // range 15-17
+        lottery.enter(3); // range 15-17
 
         // 3. Before deadline → no upkeep
-        (upkeepNeeded, ) = lottery.checkUpkeep("");
+        (upkeepNeeded,) = lottery.checkUpkeep("");
         assertFalse(upkeepNeeded, "Before deadline -> no upkeep");
 
         // 4. Exactly at deadline → no upkeep (strict >)
         vm.warp(block.timestamp + DURATION);
-        (upkeepNeeded, ) = lottery.checkUpkeep("");
+        (upkeepNeeded,) = lottery.checkUpkeep("");
         assertFalse(upkeepNeeded, "Exactly at deadline -> no upkeep");
 
         // 5. One second after → YES upkeep
         vm.warp(block.timestamp + 1);
-        (upkeepNeeded, ) = lottery.checkUpkeep("");
+        (upkeepNeeded,) = lottery.checkUpkeep("");
         assertTrue(upkeepNeeded, "After deadline with players -> upkeep");
 
         // 6. Bonus: State check
@@ -255,7 +252,6 @@ contract LotteryTest is Test, ILotteryEvents {
         // === RECORD ALL EVENTS during performUpkeep() ===
         vm.recordLogs();
         lottery.performUpkeep("");
-        
 
         // === Extract the requestId from LotteryClosed event ===
         Vm.Log[] memory logs = vm.getRecordedLogs();
@@ -269,7 +265,7 @@ contract LotteryTest is Test, ILotteryEvents {
         }
 
         assertGt(requestId, 0, "requestId should be emitted");
-        
+
         // === Set up mock randomness: 6 → falls in player2 range (5–7) ===
         uint256[] memory randomWords = new uint256[](1);
         randomWords[0] = 6;
@@ -287,44 +283,46 @@ contract LotteryTest is Test, ILotteryEvents {
         // Player enters and wins (single player auto-win)
         vm.prank(player1);
         lottery.enter(10);
-        
+
         vm.warp(block.timestamp + DURATION + 1);
         lottery.performUpkeep("");
-        
+
         // Winner claims
         uint256 prize = lottery.prizePool();
         uint256 balanceBefore = usdc.balanceOf(player1);
-        
+
         vm.prank(player1);
         lottery.claimPrize();
-        
+
         assertEq(usdc.balanceOf(player1), balanceBefore + prize);
         assertTrue(lottery.prizeClaimed());
         assertEq(lottery.prizePool(), 0);
     }
+
     function test_10_FeesAreSentToOwnerInPerformUpkeep() public {
         vm.prank(player1);
         lottery.enter(10);
-        
+
         vm.prank(player2);
         lottery.enter(10);
-        
+
         uint256 expectedFees = (20 * TICKET_PRICE) / 100;
         assertEq(lottery.platformFees(), expectedFees);
-        
+
         uint256 ownerBalanceBefore = usdc.balanceOf(owner);
-        
+
         // Trigger upkeep
         vm.warp(block.timestamp + DURATION + 1);
         lottery.performUpkeep("");
-        
+
         // Owner should receive fees
         assertEq(usdc.balanceOf(owner), ownerBalanceBefore + expectedFees);
         assertEq(lottery.platformFees(), 0);
     }
+
     function test_11_CannotEnterAfterDeadline() public {
         vm.warp(block.timestamp + DURATION + 1);
-        
+
         vm.expectRevert("Lottery ended");
         vm.prank(player1);
         lottery.enter(1);
@@ -333,10 +331,10 @@ contract LotteryTest is Test, ILotteryEvents {
     function test_12_CannotEnterWhenCalculating() public {
         vm.prank(player1);
         lottery.enter(1);
-        
+
         vm.warp(block.timestamp + DURATION + 1);
         lottery.performUpkeep("");
-        
+
         // State is now CALCULATING (or FINISHED if single player)
         vm.expectRevert();
         vm.prank(player2);
@@ -347,7 +345,7 @@ contract LotteryTest is Test, ILotteryEvents {
         usdc.mint(player1, 2000e6);
         vm.prank(player1);
         lottery.enter(MAX_TICKETS);
-        
+
         vm.expectRevert("Max tickets exceeded");
         vm.prank(player2);
         lottery.enter(1);
@@ -362,10 +360,10 @@ contract LotteryTest is Test, ILotteryEvents {
     function test_15_OnlyWinnerCanClaim() public {
         vm.prank(player1);
         lottery.enter(1);
-        
+
         vm.warp(block.timestamp + DURATION + 1);
         lottery.performUpkeep("");
-        
+
         // Player2 tries to claim but isn't winner
         vm.expectRevert("Not winner");
         vm.prank(player2);
@@ -375,13 +373,13 @@ contract LotteryTest is Test, ILotteryEvents {
     function test_16_CannotClaimTwice() public {
         vm.prank(player1);
         lottery.enter(1);
-        
+
         vm.warp(block.timestamp + DURATION + 1);
         lottery.performUpkeep("");
-        
+
         vm.prank(player1);
         lottery.claimPrize();
-        
+
         vm.expectRevert("Already claimed");
         vm.prank(player1);
         lottery.claimPrize();
@@ -390,23 +388,23 @@ contract LotteryTest is Test, ILotteryEvents {
     function test_17_RecoverStuckLottery() public {
         vm.prank(player1);
         lottery.enter(5);
-        
+
         vm.prank(player2);
         lottery.enter(5);
-        
+
         // Trigger lottery close
         vm.warp(block.timestamp + DURATION + 1);
         lottery.performUpkeep("");
-        
+
         assertEq(uint256(lottery.lotteryState()), 1); // CALCULATING
-        
+
         // Fast forward past VRF timeout
         vm.warp(block.timestamp + VRF_TIMEOUT_SECONDS + 1);
-        
+
         // Owner can recover
         vm.prank(address(factory));
         lottery.recoverStuckLottery();
-        
+
         assertEq(uint256(lottery.lotteryState()), 0); // OPEN
     }
 
@@ -416,10 +414,13 @@ contract LotteryTest is Test, ILotteryEvents {
 
     function test_18_FullFlowEndToEnd() public {
         console.log("Starting Full Lottery Flow...");
-        
-        vm.prank(player1); lottery.enter(10);
-        vm.prank(player2); lottery.enter(5);
-        vm.prank(player3); lottery.enter(15);
+
+        vm.prank(player1);
+        lottery.enter(10);
+        vm.prank(player2);
+        lottery.enter(5);
+        vm.prank(player3);
+        lottery.enter(15);
 
         assertEq(lottery.getTotalTicketsSold(), 30);
         assertEq(lottery.prizePool(), 30 * TICKET_PRICE);
@@ -474,15 +475,9 @@ contract LotteryTest is Test, ILotteryEvents {
 
         vm.startPrank(owner);
 
-        address lottery1 = factory.createLottery(
-            1e6, address(usdc), 100, 1 hours, 500_000, 1 hours
-        );
-        address lottery2 = factory.createLottery(
-            2e6, address(usdc), 200, 2 hours, 500_000, 1 hours
-        );
-        address lottery3 = factory.createLottery(
-            3e6, address(usdc), 300, 3 hours, 500_000, 1 hours
-        );
+        address lottery1 = factory.createLottery(1e6, address(usdc), 100, 1 hours, 500_000, 1 hours);
+        address lottery2 = factory.createLottery(2e6, address(usdc), 200, 2 hours, 500_000, 1 hours);
+        address lottery3 = factory.createLottery(3e6, address(usdc), 300, 3 hours, 500_000, 1 hours);
 
         vm.stopPrank();
 
@@ -506,29 +501,15 @@ contract LotteryTest is Test, ILotteryEvents {
     function test_21_RemoveConsumerFreesSlotAndAllowsNewLottery() public {
         // === Fill up to 99 lotteries (max consumers) ===
         // === Mock counts owner(factory) as consumer ===
-        for (uint i = 0; i < 99; i++) {
+        for (uint256 i = 0; i < 99; i++) {
             vm.prank(owner);
-            factory.createLottery(
-                TICKET_PRICE,
-                address(usdc),
-                MAX_TICKETS,
-                DURATION,
-                500_000,
-                1 hours
-            );
+            factory.createLottery(TICKET_PRICE, address(usdc), MAX_TICKETS, DURATION, 500_000, 1 hours);
         }
 
         // === Try to create 100th lottery → should REVERT (no consumer slot) ===
         vm.expectRevert(); // Chainlink: "Too many consumers"
         vm.prank(owner);
-        factory.createLottery(
-            TICKET_PRICE,
-            address(usdc),
-            MAX_TICKETS,
-            DURATION,
-            500_000,
-            1 hours
-        );
+        factory.createLottery(TICKET_PRICE, address(usdc), MAX_TICKETS, DURATION, 500_000, 1 hours);
 
         // === Get the first lottery address ===
         address[] memory Lotteries = factory.getAllLotteries();
@@ -540,76 +521,67 @@ contract LotteryTest is Test, ILotteryEvents {
 
         // === Now create 101th lottery → should PASS ===
         vm.prank(owner);
-        address newLottery = factory.createLottery(
-            TICKET_PRICE,
-            address(usdc),
-            MAX_TICKETS,
-            DURATION,
-            500_000,
-            1 hours
-        );
+        address newLottery = factory.createLottery(TICKET_PRICE, address(usdc), MAX_TICKETS, DURATION, 500_000, 1 hours);
 
         assertTrue(newLottery != address(0), "100th lottery created after removal");
     }
 
     function test_GasDoSWith1000Players() public {
         // Fund 1000 different addresses
-        for (uint i = 0; i < 1005; i++) {
+        for (uint256 i = 0; i < 1005; i++) {
             address attacker = address(uint160(i + 1000));
             usdc.mint(attacker, 10e6);
-            
+
             vm.startPrank(attacker);
             usdc.approve(address(lottery), type(uint256).max);
             lottery.enter(1); // Each buys 1 ticket
             vm.stopPrank();
         }
-        
+
         console.log("Total players:", lottery.getPlayerCount());
         console.log("Total tickets sold:", lottery.getTotalTicketsSold());
-        
+
         // Warp to deadline
         vm.warp(block.timestamp + DURATION + 1);
-        
+
         // Trigger VRF
         vm.recordLogs();
         lottery.performUpkeep("");
-        
+
         // Extract requestId from logs (same pattern as test_08)
         Vm.Log[] memory logs = vm.getRecordedLogs();
         uint256 requestId;
-        
+
         for (uint256 i = 0; i < logs.length; i++) {
             if (logs[i].topics[0] == keccak256("LotteryClosed(uint256)")) {
                 requestId = uint256(logs[i].topics[1]);
                 break;
             }
         }
-        
+
         assertGt(requestId, 0, "requestId should be emitted");
-        
+
         // Set up random number (winner will be player at index 500)
         uint256[] memory randomWords = new uint256[](1);
         randomWords[0] = 500;
-        
+
         // THIS IS THE CRITICAL MEASUREMENT:
         console.log("\n=== GAS MEASUREMENT START ===");
         console.log("Callback gas limit:", lottery.s_callbackGasLimit());
-        
+
         uint256 gasStart = gasleft();
-        
+
         // Attempt to fulfill VRF
         vrfMock.fulfillRandomWords(requestId, address(lottery));
-        
+
         uint256 gasUsed = gasStart - gasleft();
-        
+
         console.log("Gas used for 1000 players:", gasUsed);
         console.log("=== GAS MEASUREMENT END ===\n");
-        
+
         // Check if winner was selected (if this passes, gas DoS didn't happen)
         address winner = lottery.winner();
         console.log("Winner selected:", winner);
         assertEq(uint256(lottery.lotteryState()), 2, "Should be FINISHED");
     }
-
-
 }

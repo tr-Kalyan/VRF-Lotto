@@ -18,18 +18,11 @@ contract LotteryFactory is Ownable {
     bytes32 public immutable vrfKeyHash;
     IVRFCoordinatorV2Plus public immutable vrfCoordinator;
 
-
-
     event LotteryCreated(address indexed lottery, address indexed creator, uint256 ticketPrice);
     event FactoryDeployed(uint256 subscriptionId);
 
-
     /// @notice Deploys factory and creates VRF subscription owned by the factory
-    constructor(
-        address _vrfCoordinator,
-        address _linkToken,
-        bytes32 _keyHash
-    ) Ownable(msg.sender) {
+    constructor(address _vrfCoordinator, address _linkToken, bytes32 _keyHash) Ownable(msg.sender) {
         vrfCoordinator = IVRFCoordinatorV2Plus(_vrfCoordinator);
         linkToken = _linkToken;
         vrfKeyHash = _keyHash;
@@ -65,7 +58,6 @@ contract LotteryFactory is Ownable {
         lotteryAddress = address(newLottery);
         allLotteries.push(lotteryAddress);
 
-
         // Factory (subscription owner) adds lottery as consumer
         vrfCoordinator.addConsumer(vrfSubscriptionId, lotteryAddress);
 
@@ -75,16 +67,12 @@ contract LotteryFactory is Ownable {
 
     /// @notice Fund the factory-owned subscription with LINK
     /// @param amount Amount of LINK to add (in wei)
-    function fundSubscription(uint256 amount) external onlyOwner{
+    function fundSubscription(uint256 amount) external onlyOwner {
         // 1. Pull LINK from caller → factory
         LinkTokenInterface(linkToken).transferFrom(msg.sender, address(this), amount);
 
         // 2. Then use factory's LINK to fund subscription
-        LinkTokenInterface(linkToken).transferAndCall(
-            address(vrfCoordinator),
-            amount,
-            abi.encode(vrfSubscriptionId)
-        );
+        LinkTokenInterface(linkToken).transferAndCall(address(vrfCoordinator), amount, abi.encode(vrfSubscriptionId));
     }
 
     /// @notice Emergency: Cancel subscription and return remaining LINK

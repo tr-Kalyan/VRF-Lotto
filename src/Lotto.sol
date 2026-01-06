@@ -20,7 +20,11 @@ contract Lottery is ILotteryEvents, VRFConsumerBaseV2Plus, AutomationCompatibleI
                                 STATE VARIABLES
     //////////////////////////////////////////////////////////////*/
 
-    enum LotteryState { OPEN, CALCULATING, FINISHED }
+    enum LotteryState {
+        OPEN,
+        CALCULATING,
+        FINISHED
+    }
 
     // Immutable configuration
     IERC20 public immutable paymentToken;
@@ -35,7 +39,6 @@ contract Lottery is ILotteryEvents, VRFConsumerBaseV2Plus, AutomationCompatibleI
     uint32 public s_callbackGasLimit;
     uint16 private constant REQUEST_CONFIRMATIONS = 3;
     uint32 private constant NUM_WORDS = 1;
-
 
     // Safety timeout
     uint256 public immutable vrfTimeoutSeconds;
@@ -55,14 +58,12 @@ contract Lottery is ILotteryEvents, VRFConsumerBaseV2Plus, AutomationCompatibleI
         address player;
         uint256 currentTotalTickets; // Upper bound of tickets owned
     }
-    
+
     TicketRange[] public playersRanges;
 
     /*//////////////////////////////////////////////////////////////
                                    EVENTS
     //////////////////////////////////////////////////////////////*/
-
-
 
     /*//////////////////////////////////////////////////////////////
                                   CONSTRUCTOR
@@ -82,7 +83,6 @@ contract Lottery is ILotteryEvents, VRFConsumerBaseV2Plus, AutomationCompatibleI
         uint256 _duration,
         uint256 _vrfTimeoutSeconds
     ) VRFConsumerBaseV2Plus(_vrfCoordinator) {
-        
         feeRecipient = _admin;
 
         // VRF parameters required by base contract
@@ -115,25 +115,18 @@ contract Lottery is ILotteryEvents, VRFConsumerBaseV2Plus, AutomationCompatibleI
         uint256 fee = cost / 100; // 1% platform fee
         uint256 totalTransfer = cost + fee;
 
-        uint256 currentTotal = playersRanges.length == 0 
-            ? 0 
-            : playersRanges[playersRanges.length - 1].currentTotalTickets;
-        
+        uint256 currentTotal =
+            playersRanges.length == 0 ? 0 : playersRanges[playersRanges.length - 1].currentTotalTickets;
+
         uint256 newTotal = currentTotal + _ticketCount;
         require(newTotal <= maxTickets, "Max tickets exceeded");
 
         prizePool += cost;
         platformFees += fee;
 
-        playersRanges.push(TicketRange({
-            player: msg.sender,
-            currentTotalTickets: newTotal
-        }));    
-
+        playersRanges.push(TicketRange({player: msg.sender, currentTotalTickets: newTotal}));
 
         paymentToken.safeTransferFrom(msg.sender, address(this), totalTransfer);
-
-        
 
         emit Entered(msg.sender, _ticketCount, currentTotal, newTotal - 1);
     }
@@ -156,12 +149,7 @@ contract Lottery is ILotteryEvents, VRFConsumerBaseV2Plus, AutomationCompatibleI
     //////////////////////////////////////////////////////////////*/
 
     /// @notice Chainlink Automation: check if lottery should be closed
-    function checkUpkeep(bytes calldata) 
-        external 
-        view 
-        override 
-        returns (bool upkeepNeeded, bytes memory) 
-    {
+    function checkUpkeep(bytes calldata) external view override returns (bool upkeepNeeded, bytes memory) {
         bool isOpen = lotteryState == LotteryState.OPEN;
         bool timePassed = block.timestamp > deadline;
         bool hasPlayers = playersRanges.length > 0;
@@ -172,7 +160,7 @@ contract Lottery is ILotteryEvents, VRFConsumerBaseV2Plus, AutomationCompatibleI
 
     /// @notice Chainlink Automation: close lottery and request randomness
     function performUpkeep(bytes calldata) external override nonReentrant {
-        (bool upkeepNeeded, ) = this.checkUpkeep("");
+        (bool upkeepNeeded,) = this.checkUpkeep("");
         require(upkeepNeeded, "Upkeep not needed");
 
         lotteryState = LotteryState.CALCULATING;
@@ -252,9 +240,15 @@ contract Lottery is ILotteryEvents, VRFConsumerBaseV2Plus, AutomationCompatibleI
                                VIEW FUNCTIONS
     //////////////////////////////////////////////////////////////*/
 
-    function getPot() external view returns (uint256) { return prizePool; }
+    function getPot() external view returns (uint256) {
+        return prizePool;
+    }
+
     function getTotalTicketsSold() external view returns (uint256) {
         return playersRanges.length == 0 ? 0 : playersRanges[playersRanges.length - 1].currentTotalTickets;
     }
-    function getPlayerCount() external view returns (uint256) { return playersRanges.length; }
+
+    function getPlayerCount() external view returns (uint256) {
+        return playersRanges.length;
+    }
 }

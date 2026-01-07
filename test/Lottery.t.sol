@@ -26,7 +26,7 @@ contract LotteryTest is Test, ILotteryEvents {
 
     uint256 public constant TICKET_PRICE = 1e6; // 1 USDC (6 decimals)
     uint256 public constant DURATION = 1 hours;
-    uint256 public constant MAX_TICKETS = 1000;
+    uint256 public constant MAX_TICKETS = 10000;
     uint256 public constant VRF_TIMEOUT_SECONDS = 3600;
 
     uint256 public subId;
@@ -342,7 +342,7 @@ contract LotteryTest is Test, ILotteryEvents {
     }
 
     function test_13_CannotExceedMaxTickets() public {
-        usdc.mint(player1, 2000e6);
+        usdc.mint(player1, 20_000e6);
         vm.prank(player1);
         lottery.enter(MAX_TICKETS);
 

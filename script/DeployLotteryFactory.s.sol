@@ -6,13 +6,11 @@ import {LotteryFactory} from "../src/LotteryFactory.sol";
 
 contract DeployLotteryFactory is Script {
     function run() external returns (LotteryFactory factory) {
-        uint256 deployerKey = vm.envUint("PRIVATE_KEY"); // deployer key
-
         address vrfCoordinator = vm.envAddress("VRF_COORDINATOR"); // coordinator
         address linkToken = vm.envAddress("LINK_TOKEN"); // LINK token
         bytes32 keyHash = vm.envBytes32("KEY_HASH"); // keyHash
 
-        vm.startBroadcast(deployerKey);
+        vm.startBroadcast();
         factory = new LotteryFactory(vrfCoordinator, linkToken, keyHash);
         vm.stopBroadcast();
 

@@ -20,9 +20,16 @@ contract LotteryFactory is Ownable {
 
     event LotteryCreated(address indexed lottery, address indexed creator, uint256 ticketPrice);
     event FactoryDeployed(uint256 subscriptionId);
+    event SubscriptionFunded(uint256 indexed subscriptionId, uint256 amount);
+    event ConsumerRemoved(address indexed lottery);
+    event SubscriptionCancelled(uint256 indexed subscriptionId, address indexed recipient);
 
     /// @notice Deploys factory and creates VRF subscription owned by the factory
     constructor(address _vrfCoordinator, address _linkToken, bytes32 _keyHash) Ownable(msg.sender) {
+        require(_vrfCoordinator != address(0), "Invalid VRF coordinator");
+        require(_linkToken != address(0), "Invalid LINK token");
+        require(_keyHash != bytes32(0), "Invalid key hash");
+
         vrfCoordinator = IVRFCoordinatorV2Plus(_vrfCoordinator);
         linkToken = _linkToken;
         vrfKeyHash = _keyHash;
@@ -42,6 +49,13 @@ contract LotteryFactory is Ownable {
         uint32 _callbackGasLimit,
         uint256 _vrfRequestTimeoutSeconds
     ) external onlyOwner returns (address lotteryAddress) {
+        require(_paymentTokenAddress != address(0), "Invalid payment token");
+        require(_ticketPrice > 0, "Ticket price must be positive");
+        require(_maxPlayers > 0, "Max players must be positive");
+        require(_lotteryDurationSeconds > 0, "Duration must be positive");
+        require(_callbackGasLimit >= 100000, "Gas limit too low");
+        require(_callbackGasLimit <= 2500000, "Gas limit exceeds VRF max");
+
         Lottery newLottery = new Lottery(
             owner(), // Deployer of LotteryFactory
             address(vrfCoordinator),
@@ -68,16 +82,23 @@ contract LotteryFactory is Ownable {
     /// @notice Fund the factory-owned subscription with LINK
     /// @param amount Amount of LINK to add (in wei)
     function fundSubscription(uint256 amount) external onlyOwner {
-        // 1. Pull LINK from caller → factory
-        LinkTokenInterface(linkToken).transferFrom(msg.sender, address(this), amount);
+        // Transfer LINK from owner to factory
+        require(LinkTokenInterface(linkToken).transferFrom(msg.sender, address(this), amount), "LINK transfer failed");
 
-        // 2. Then use factory's LINK to fund subscription
-        LinkTokenInterface(linkToken).transferAndCall(address(vrfCoordinator), amount, abi.encode(vrfSubscriptionId));
+        // Factory uses transferAndCall to fund subscription
+        // transferAndCall sends from factory's balance
+        require(
+            LinkTokenInterface(linkToken)
+                .transferAndCall(address(vrfCoordinator), amount, abi.encode(vrfSubscriptionId)),
+            "Subscription funding failed"
+        );
+        emit SubscriptionFunded(vrfSubscriptionId, amount);
     }
 
     /// @notice Emergency: Cancel subscription and return remaining LINK
     function cancelSubscription() external onlyOwner {
         vrfCoordinator.cancelSubscription(vrfSubscriptionId, owner());
+        emit SubscriptionCancelled(vrfSubscriptionId, owner());
     }
 
     function getAllLotteries() external view returns (address[] memory) {
@@ -88,5 +109,6 @@ contract LotteryFactory is Ownable {
     /// @param lotteryAddress Address of the finished lottery
     function removeConsumer(address lotteryAddress) external onlyOwner {
         vrfCoordinator.removeConsumer(vrfSubscriptionId, lotteryAddress);
+        emit ConsumerRemoved(lotteryAddress);
     }
 }

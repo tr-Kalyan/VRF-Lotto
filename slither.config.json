@@ -2,6 +2,6 @@
   "exclude_low": true,
   "exclude_informational": true,
   "exclude_optimization": true,
-  "filter_paths": "test/|script/|mock/",
+  "filter_paths": "test/|script/|mock/|lib",
   "detectors_to_exclude": "naming-convention,external-function"
 }
